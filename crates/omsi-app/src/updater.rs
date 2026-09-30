@@ -33,7 +33,9 @@ use std::sync::{Arc, Mutex};
 /// The project on GitHub.
 pub const REPO: &str = "turbo-devv/openOMSI";
 pub const REPO_URL: &str = "https://github.com/turbo-devv/openOMSI";
-const LATEST_API: &str = "https://api.github.com/repos/turbo-devv/openOMSI/releases/latest";
+// (this build is a friends' build with fixes not yet in the project: it takes its updates
+// from the fork it was published on, or the project's next release would take them away)
+const LATEST_API: &str = "https://api.github.com/repos/Jaja80330/openOMSI/releases/latest";
 
 /// A release newer than this build, with the file for this platform.
 #[derive(Clone, Debug, PartialEq)]
