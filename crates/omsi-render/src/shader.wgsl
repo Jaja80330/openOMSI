@@ -701,8 +701,12 @@ fn sun_shadow(world_in: vec3<f32>, n: vec3<f32>, thin: bool) -> f32 {
 // often depended on where the cell edges fell - lamp pools brightened and dimmed as the
 // camera moved.
 // `map_k`: how much of the map's lamps a surface takes (0 on a light-mapped road in the
-// classic picture, whose lamps are in its light map); a vehicle's own lights (dir.x 1, see
-// lib.rs `gpu_light`) always shine - the headlights lit no road at all in vanilla.
+// classic picture, whose lamps are in its light map); a vehicle's own lights (dir.w -3, see
+// lib.rs `gpu_light`) always shine - the headlights lit no road at all in vanilla - but only
+// within their headlight's cone (axis dir.xyz, from extra.x behind the light, cosines of the
+// outer and inner cone in extra.y/z): all round, they lit their own bus's front and saloon.
+// The cone is seen from the nearest point of the line between the pair of headlamps, whose
+// half width is -3 - dir.w: one beam from the axis looked like a single headlamp.
 fn point_lights(p: vec3<f32>, n: vec3<f32>, map_k: f32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     let cell = camera.light_grid.z;
@@ -732,7 +736,18 @@ fn point_lights(p: vec3<f32>, n: vec3<f32>, map_k: f32) -> vec3<f32> {
             let r0 = l.pos.w * 0.125;
             let att = min(1.0, (r0 * r0) / max(dist * dist, 0.01)) * clamp(1.0 - dist / l.pos.w, 0.0, 1.0) * 3.75;
             let ndl = max(dot(n, d / max(dist, 0.01)), 0.15);
-            let k = select(map_k, 1.0, l.dir.x > 0.5 && l.dir.w < -1.5);
+            let headlight = l.dir.w < -2.5;
+            var k = select(map_k, 1.0, headlight);
+            if (headlight) {
+                let apex = l.pos.xyz - l.dir.xyz * l.extra.x;
+                let right = cross(l.dir.xyz, vec3<f32>(0.0, 0.0, 1.0));
+                let side = right / max(length(right), 1e-3);
+                let spread = -3.0 - l.dir.w;
+                var to = p - apex;
+                to = to - side * clamp(dot(to, side), -spread, spread);
+                let cd = dot(to, l.dir.xyz) / max(length(to), 1e-3);
+                k = k * smoothstep(l.extra.y, max(l.extra.z, l.extra.y + 0.01), cd);
+            }
             sum = sum + l.color.rgb * l.color.w * att * ndl * k;
         }
     }

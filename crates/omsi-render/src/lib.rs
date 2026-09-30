@@ -242,6 +242,15 @@ pub struct PointLight {
     /// horizon than along its axis, so that the road far ahead is lit as a low beam lights
     /// it rather than only the pool in front of the bumper (0 = an even cone).
     pub beam: f32,
+    /// A vanilla headlight stand-in (`LightMode::Vanilla` with a `direction`): how far
+    /// behind the light, along `direction`, lies the point the headlight shines from. Only
+    /// what lies within its `cone` from there is lit - not the vehicle's own front or its
+    /// saloon.
+    pub cut: f32,
+    /// A vanilla headlight stand-in: the half width of the vehicle's pair of headlamps. The
+    /// cone is seen from the nearest point of the line between them, so the pool on the
+    /// road is as wide as the pair's rather than one beam from the vehicle's axis.
+    pub spread: f32,
     /// Which path draws the light.
     pub mode: LightMode,
 }
@@ -257,6 +266,8 @@ impl Default for PointLight {
             cone: [1.0, 0.0],
             core: 0.0,
             beam: 0.0,
+            cut: 0.0,
+            spread: 0.0,
             mode: LightMode::Both,
         }
     }
@@ -8567,12 +8578,13 @@ fn drawn_by(l: &PointLight, enhanced: bool) -> bool {
 /// A light as the shaders read it, at `p` relative to the render origin.
 fn gpu_light(l: &PointLight, p: Vec3) -> GpuPointLight {
     let spot = l.direction.length_squared() > 1e-6;
-    let dir = if spot {
+    let dir = if l.mode == LightMode::Vanilla {
+        // a vehicle's headlight stand-in (w -3 less its spread, below 3 m): lights a
+        // light-mapped road too, and only within its cone along xyz (see shader.wgsl
+        // point_lights)
+        l.direction.normalize_or_zero().extend(-3.0 - l.spread.clamp(0.0, 2.9)).to_array()
+    } else if spot {
         l.direction.normalize().extend(l.cone[1]).to_array()
-    } else if l.mode == LightMode::Vanilla {
-        // (a vehicle's headlight stand-in: lights a light-mapped road too, see
-        // shader.wgsl point_lights)
-        [1.0, 0.0, 0.0, -2.0]
     } else {
         [0.0, 0.0, 0.0, -2.0]
     };
@@ -8585,7 +8597,13 @@ fn gpu_light(l: &PointLight, p: Vec3) -> GpuPointLight {
         pos: [p.x, p.y, p.z, vanilla_radius],
         color: [l.color[0], l.color[1], l.color[2], l.intensity],
         dir,
-        extra: [l.cone[0], l.core, l.beam, l.radius],
+        // (a stand-in: x how far back it shines from, y/z its outer and inner cone - the
+        // vanilla shader reads neither core nor beam)
+        extra: if l.mode == LightMode::Vanilla {
+            [l.cut, l.cone[1], l.cone[0], l.radius]
+        } else {
+            [l.cone[0], l.core, l.beam, l.radius]
+        },
     }
 }
 
@@ -9818,6 +9836,21 @@ mod tests {
         // a headlight's beam gain rides along; a plain lamp has none
         assert_eq!(g.extra[2], 24.0);
         assert_eq!(gpu_light(&lamp, Vec3::ZERO).extra[2], 0.0);
+        // a stand-in: a point light for the vanilla shader, flagged as a headlight, with the
+        // plane it may not light behind
+        let g = gpu_light(
+            &PointLight {
+                direction: Vec3::new(0.0, 2.0, 0.0),
+                cone: [0.97, 0.82],
+                cut: 5.0,
+                spread: 0.5,
+                ..stand_in
+            },
+            Vec3::ZERO,
+        );
+        assert_eq!(g.pos[3], 18.0);
+        assert_eq!(g.dir, [0.0, 1.0, 0.0, -3.5]);
+        assert_eq!(g.extra, [5.0, 0.82, 0.97, 18.0]);
     }
 
     #[test]
