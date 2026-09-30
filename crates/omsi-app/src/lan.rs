@@ -277,6 +277,9 @@ impl SyncTable {
         let rain_film = |n: &str| n.trim().to_ascii_lowercase().starts_with("rain_window");
         for m in &model.meshes {
             value_names.extend(m.materials.iter().filter_map(|mat| mat.alphascale.clone()).filter(|n| rain_film(n)));
+            // what scrolls a texture along its slot: a roller blind turning to the next
+            // number (its pictures come in the pose, see `freetex_names`)
+            value_names.extend(m.materials.iter().flat_map(|mat| mat.texcoord_trans_x.iter().chain(mat.texcoord_trans_y.iter()).cloned()));
         }
         let taken: Vec<VarId> = lamps.iter().chain(&switches).map(|l| l.1).collect();
         let values = collect(
@@ -1607,6 +1610,7 @@ pub fn my_pose(
     let box_offset = ((fp.x - v.position.x) * h.sin() + (fp.y - v.position.y) * h.cos()) as f32;
     let (line, destination) = line_and_destination(p, duty);
     let texts = display_texts(v);
+    let freetex = freetex_values(v);
     Pose {
         id: 0,
         name: String::new(),
@@ -1616,6 +1620,7 @@ pub fn my_pose(
         destination,
         tour: String::new(),
         texts,
+        freetex,
         figure: p.driver.as_ref().map(|d| content_relative(&d.human_type().def.path, &args.root)).unwrap_or_default(),
         length: fp.length.max(bb[1]),
         width: bb[0],
@@ -1670,6 +1675,48 @@ fn display_texts(v: &omsi_sim::VehicleInstance) -> Vec<String> {
         .take(omsi_net::MAX_TEXTS)
         .map(|t| v.ty.program.str_var(t.variable.trim()).and_then(|i| v.state.str_vars.get(i as usize)).cloned().unwrap_or_default())
         .collect()
+}
+
+/// The `[matl_freetex]` string variables of a vehicle type, sorted by name (both games
+/// agree on the order): the picture a slot shows is the file one of them names - a roller
+/// blind's number, a sign. Worked out by the sender's scripts alone.
+fn freetex_names(ty: &omsi_sim::VehicleType) -> Vec<String> {
+    let mut names: Vec<String> = ty
+        .model
+        .meshes
+        .iter()
+        .flat_map(|m| m.materials.iter().filter_map(|mat| mat.freetex.as_ref().map(|f| f.1.trim().to_string())))
+        .filter(|n| ty.program.str_var(n).is_some())
+        .collect();
+    names.sort_by_key(|n| n.to_ascii_lowercase());
+    names.dedup_by_key(|n| n.to_ascii_lowercase());
+    names.truncate(omsi_net::MAX_FREETEX);
+    names
+}
+
+/// What the vehicle's `[matl_freetex]` variables hold now (see [`freetex_names`]).
+fn freetex_values(v: &omsi_sim::VehicleInstance) -> Vec<String> {
+    freetex_names(&v.ty)
+        .iter()
+        .map(|n| v.ty.program.str_var(n).and_then(|i| v.state.str_vars.get(i as usize)).cloned().unwrap_or_default())
+        .collect()
+}
+
+/// Show another player's `[matl_freetex]` pictures on their bus here: their copy's scripts
+/// do not run the roller blind, which stood empty (the line number never showed).
+fn show_freetex(v: &mut omsi_sim::VehicleInstance, values: &[String]) {
+    if values.is_empty() {
+        return;
+    }
+    for (name, value) in freetex_names(&v.ty).iter().zip(values) {
+        if let Some(i) = v.ty.program.str_var(name) {
+            if let Some(s) = v.state.str_vars.get_mut(i as usize) {
+                if s != value {
+                    *s = value.clone();
+                }
+            }
+        }
+    }
 }
 
 /// Show another player's display texts on their bus here (same files, same order).
@@ -2905,11 +2952,13 @@ pub fn tick(
                 ip.line = pose.line.clone();
                 ip.destination = pose.destination.clone();
                 ip.texts = pose.texts.clone();
+                ip.freetex = pose.freetex.clone();
                 drive_remote(rv, &ip, dt, true);
             }
             None => drive_remote(rv, &pose, dt, false),
         }
         show_display_texts(&mut rv.vehicle, &pose.texts);
+        show_freetex(&mut rv.vehicle, &pose.freetex);
         let inside = frame.inside_of == Some(pose.id);
         sound_remote(rv, frame.audio, frame.listener, frame.muffled, inside);
     }
