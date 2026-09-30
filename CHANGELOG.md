@@ -4,6 +4,31 @@ Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/turbo-devv/openOMSI/releases) page.
 
+## 0.1.328 - 2026-09-30
+
+### Vehicles
+- The wheels stand on the road: the suspension's spring point is where Omsi.exe puts it,
+  on the model's origin plane under each wheel, measured straight up. Measured from the hub
+  less the `.bus` file's tyre radius, a mod whose tyre mesh is larger than that stood with
+  its wheels sunk a few centimetres into the spline.
+
+### Pictures
+- Enhanced: chrome and metal parts of a vehicle - opaque, with a sphere map, not the body -
+  are metal by their `[matl_envmap]` factor, as the vanilla picture shows them; their bump
+  maps bend the reflection. The body stays paint unless it has a mask of its own.
+- LED destination panels glow in the enhanced picture; "LED glow" and "LED masks keep
+  their mipmaps" are settings (#324, by NACHN).
+
+### Sound
+- People walking in the street no longer sound as if they walked on a bus floor (the
+  passengers' step samples, `Sounds\Passengers`, are for passengers aboard), and the stair
+  samples are left out of the steps (#236).
+
+### Game
+- Teleporting to a street picked on the city map works across a big map: the navigator's
+  lanes of the whole map are taken when the loaded tiles have no street there, and the bus
+  waits at the street's height for its tiles instead of dropping through (#235).
+
 ## 0.1.323 - 2026-09-30
 
 Crash reports from phones, a lost graphics device on DirectX 12, the vanilla night, and five

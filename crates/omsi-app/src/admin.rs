@@ -274,17 +274,14 @@ pub(crate) fn teleport(app: &mut App, at: glam::DVec3, heading: f64) {
     }
     // on the level at the height asked for (a car park under a building, a road under a
     // bridge), else the highest ground there (a place picked on the map, at no height)
-    let z = app
-        .world
-        .as_ref()
-        .and_then(|w| {
-            let near = (at.z != 0.0)
-                .then(|| crate::scene::drive_probe(&w.terrains, &w.surfaces, at.x, at.y, at.z + 1.5).below)
-                .flatten()
-                .filter(|b| (at.z - b).abs() < 3.0);
-            near.or_else(|| w.walk_height(at.x, at.y))
-        })
-        .unwrap_or(at.z);
+    let ground = app.world.as_ref().and_then(|w| {
+        let near = (at.z != 0.0)
+            .then(|| crate::scene::drive_probe(&w.terrains, &w.surfaces, at.x, at.y, at.z + 1.5).below)
+            .flatten()
+            .filter(|b| (at.z - b).abs() < 3.0);
+        near.or_else(|| w.walk_height(at.x, at.y))
+    });
+    let z = ground.unwrap_or(at.z);
     if let Some(p) = app.player.as_mut() {
         // (as a joining player's bus is moved off an occupied spawn: `lan::clear_spawn`)
         let origin = glam::DVec3::new(at.x, at.y, z);
@@ -296,8 +293,13 @@ pub(crate) fn teleport(app: &mut App, at: glam::DVec3, heading: f64) {
         for t in p.vehicle.trailers.iter_mut() {
             t.realign();
         }
-        for _ in 0..3 {
-            p.vehicle.update(1.0 / 30.0);
+        // (settled on the ground there; where its tiles are still to be read - a street far
+        // off picked on the map - it waits at the street's height for them, as the frame
+        // holds a bus with no ground under it, instead of dropping through first)
+        if ground.is_some() {
+            for _ in 0..3 {
+                p.vehicle.update(1.0 / 30.0);
+            }
         }
         log::info!("teleported to ({:.1}, {:.1}) heading {heading:.0}", at.x, at.y);
     }

@@ -2265,18 +2265,20 @@ impl App {
             self.service_msg = Some(("In a LAN session only the host moves vehicles on the map".into(), 4.0));
             return;
         }
-        let net = self.traffic.as_ref().map(|t| &t.net).or_else(|| self.navigator.as_ref().and_then(|n| n.map_net()));
-        let Some(net) = net else { return };
         let p = glam::DVec3::new(at.x, at.y, 0.0);
-        // (the height of the point does not matter: the nearest by the ground plan)
-        let Some((lane, s, dist)) = net.nearest_lane(p, omsi_sim::traffic::LaneKind::Street) else {
+        // the traffic's lanes (the tiles loaded around the bus), else the navigator's of the
+        // whole map: a street far off on a big map was "no street" until the bus had been
+        // flown there (#235). (the height of the point does not matter: the nearest by the
+        // ground plan)
+        let nets = [self.traffic.as_ref().map(|t| &t.net), self.navigator.as_ref().and_then(|n| n.map_net())];
+        let Some((net, (lane, s, _))) = nets
+            .into_iter()
+            .flatten()
+            .find_map(|net| net.nearest_lane(p, omsi_sim::traffic::LaneKind::Street).filter(|(_, _, d)| *d <= 300.0).map(|f| (net, f)))
+        else {
             self.service_msg = Some(("No street near that point".into(), 3.0));
             return;
         };
-        if dist > 300.0 {
-            self.service_msg = Some(("No street near that point".into(), 3.0));
-            return;
-        }
         let l = &net.lanes[lane];
         let (pos, heading) = l.at(s);
         let heading = heading as f64;

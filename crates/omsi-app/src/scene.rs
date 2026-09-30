@@ -9149,6 +9149,7 @@ fn material_extra(
         rain_film: false,
         display: false,
         screen: false,
+        led: false,
         no_map_lights: false,
         moisture: 0.0,
         transmap_declared: ov.iter().any(|o| o.transmap.is_some()),
@@ -9159,6 +9160,7 @@ fn material_extra(
             .find(|o| o.tex_address != omsi_model::TexAddress::Wrap)
             .filter(|o| o.tex_address == omsi_model::TexAddress::Border)
             .map(|o| o.border_color.map(|c| (c / 255.0).clamp(0.0, 1.0))),
+        metal_ok: false,
     }
 }
 
@@ -10590,6 +10592,9 @@ impl World {
                 // a script's screen (matrix displays, the IBIS's picture, LCDs) likewise
                 let mut extra = d.extra;
                 extra.screen = d.script.is_some() || d.script_trans.is_some();
+                // ... and a `\S:n` mask makes it an LED panel: its lit dots are its own
+                // light, which the enhanced picture blooms (see `MaterialExtra::led`)
+                extra.led = d.script_trans.is_some();
                 let m = renderer.add_material_extra(
                     scene,
                     tex,
@@ -10949,9 +10954,21 @@ impl World {
                     let textured = tex.is_some() || text_slot.is_some() || script_slot.is_some() || freetex || vt.texchange(&m.texture).is_some();
                     let (color, emissive, specular) = d3d_material(m, ov.iter().find_map(|o| o.allcolor), textured);
                     let mut extra = material_extra(&ov, env_mask, bump, specular);
+                    // a script's screen (matrix displays, the IBIS's picture, LCDs) is the
+                    // glow's and FXAA's business (see `MaterialExtra::screen`), and a `\S:n`
+                    // mask makes it an LED panel whose lit dots are its own light
+                    // (`MaterialExtra::led`, the enhanced picture's bloom). A slot that is a
+                    // `[matl_item]` variant keeps its materials here, not in `dyn_slots`:
+                    // without the flags on this `extra` the K++ and Krueger panels showed
+                    // their dots but never glowed.
+                    extra.screen = script_slot.is_some() || script_trans.is_some();
+                    extra.led = script_trans.is_some();
                     if dirt_overlay {
                         extra.no_z_write = true;
                     }
+                    // (chrome: a small opaque part with a sphere map, not the body - see
+                    // `MaterialExtra::metal_ok`)
+                    extra.metal_ok = envmap.is_some() && alpha == AlphaMode::Opaque && !named_body && !material_has_vehicle_volume(&vm.data, slot);
                     // A few stock vehicles leave noZwrite off on window/dirt materials even
                     // though their alpha mode is Blend. They are transparent colour layers,
                     // not solid shadow casters; letting them into the shadow map paints the
@@ -11013,6 +11030,10 @@ impl World {
                         let (it_color, it_emissive, it_specular) = d3d_material(m, ov_item.iter().find_map(|o| o.allcolor).or(ov.iter().find_map(|o| o.allcolor)), textured);
                         let mut it_extra = material_extra(&ov_item, env_mask, bump, it_specular);
                         it_extra.night_switched = ov_item.iter().any(|o| o.nightmap.is_some());
+                        it_extra.screen = script_item.is_some() || it_script_trans.is_some();
+                        // (the item's `\S:n`, or the one it inherits from its base, keeps it
+                        // an LED panel: see `MaterialExtra::led`)
+                        it_extra.led = it_script_trans.is_some();
                         it_extra.no_z_write |= extra.no_z_write;
                         it_extra.no_z_check |= extra.no_z_check;
                         it_extra.glass |= extra.glass;

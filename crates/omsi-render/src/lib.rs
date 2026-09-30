@@ -85,6 +85,9 @@ struct EnhancedUniform {
     /// xyz where the sky cube was drawn from, relative to the camera (the dome looks the
     /// clouds up through it with the parallax taken out)
     eye: [f32; 4],
+    /// x how bright an LED panel's dots burn (`Lighting::led_glow`), y whether the LED
+    /// panels' masks keep their mip chain (`Lighting::led_mips`)
+    led: [f32; 4],
 }
 
 /// High-range colour targets of the enhanced path for one size: the multisampled one the
@@ -513,6 +516,14 @@ pub struct Lighting {
     pub rain: f32,
     pub fog_base: Option<f64>,
     pub envir_tint: [Vec3; 3],
+    /// How bright an LED panel's dots burn (`MaterialExtra::led`; the settings' 16 levels
+    /// give 0 = off .. 3.75): the enhanced picture draws them this much above their own
+    /// colour, bright enough for the glow to bloom a halo around the panel.
+    pub led_glow: f32,
+    /// The LED panels' `\S:n` masks keep the mip chain `STFilter` asks for. Off, they are
+    /// sampled at full resolution: the dots stay visible when the panel is small on the
+    /// screen, at the cost of the shimmer the mip chain exists to prevent.
+    pub led_mips: bool,
 }
 
 impl Lighting {
@@ -555,6 +566,8 @@ impl Default for Lighting {
             rain: 0.0,
             fog_base: None,
             envir_tint: [Vec3::ONE; 3],
+            led_glow: 1.5,
+            led_mips: true,
         }
     }
 }
@@ -709,6 +722,12 @@ pub struct MaterialExtra {
     /// and FXAA leave it alone (see `MASK_FORMAT`): FXAA took half the contrast out of
     /// their letters and they read as blurred.
     pub screen: bool,
+    /// An LED matrix - a display whose lit dots are the `\S:n` script texture's
+    /// (`[matl_transmap]`), the Krueger and K++ destination panels: the dots are the
+    /// panel's own light, so the enhanced picture lets them burn in HDR and blooms them
+    /// (the glow's source keeps them, where the other screens are left out of it -
+    /// something no Direct3D 9 without shaders of its own could do). `MASK_FORMAT`'s g.
+    pub led: bool,
     /// The film of water on a window (`[alphascale] Rain_Window_…`): drawn as drops that sit,
     /// gather and run down the glass instead of the texture sliding down as a whole.
     pub rain_film: bool,
@@ -727,6 +746,11 @@ pub struct MaterialExtra {
     /// as Direct3D's border addressing does: a roller blind's band that has scrolled away
     /// vanishes in a transparent border.
     pub border: Option<[f32; 4]>,
+    /// An opaque, sphere-mapped part of a vehicle that is not its body (a handrail, a
+    /// bumper, a wheel trim): the enhanced picture may make it metal by its `[matl_envmap]`
+    /// factor alone, as the vanilla one shows the sphere map on it - chrome read as a
+    /// faint clear coat there. A body needs a mask of its own for that (a Golf's bonnet).
+    pub metal_ok: bool,
 }
 
 /// The textures a material's bind group samples.
@@ -1298,9 +1322,12 @@ pub const AUTO_SCALE_PIXELS: f32 = if cfg!(target_os = "macos") || cfg!(target_o
 pub const MAX_LAMPS_PER_MESH: u32 = 63;
 pub const LAMP_CODE_STRIDE: u32 = 64;
 
-/// The enhanced pass's second target: 1 where the bus's own screens are (`MaterialExtra::
-/// screen`), 0 elsewhere. The glow takes no light from it and FXAA passes it through.
-const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// The enhanced pass's second target: r is 1 where the bus's own screens are
+/// (`MaterialExtra::screen`), 0 elsewhere - the glow takes no light from them and FXAA
+/// passes them through; g is 1 on an LED panel's own dots (`MaterialExtra::led`), which the
+/// glow's source keeps and multiplies up (see `post.wgsl`). (Two channels, not one: an
+/// R8Unorm target drops what a shader writes into its g.)
+const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// The colour targets of a pipeline drawing into `format`: in the enhanced pass (the only
@@ -4730,11 +4757,13 @@ impl Renderer {
                 if lightmap.is_some() { 1.0 } else { 0.0 },
                 envmap.map(|e| e.1).unwrap_or(0.0),
                 moisture,
-                // bit 1: a [matl_envmap_mask]; bit 2: a [matl_transmap] (see the shaders)
+                // bit 1: a [matl_envmap_mask]; bit 2: a [matl_transmap]; bit 4: a vehicle's
+                // part that may be metal (see the shaders)
                 (if env_mask.is_some() { 1.0 } else { 0.0 })
-                    + if extra.transmap_declared || transmap.is_some() { 2.0 } else { 0.0 },
+                    + if extra.transmap_declared || transmap.is_some() { 2.0 } else { 0.0 }
+                    + if extra.metal_ok { 4.0 } else { 0.0 },
             ],
-            emissive: [emissive[0], emissive[1], emissive[2], if extra.rain_film { 2.0 } else if extra.glass { 1.0 } else if extra.display { -1.0 } else { 0.0 }],
+            emissive: [emissive[0], emissive[1], emissive[2], if extra.rain_film { 2.0 } else if extra.glass { 1.0 } else if extra.led { -2.0 } else if extra.display { -1.0 } else { 0.0 }],
             specular: extra.specular,
             bump: [
                 bump.map(|b| b.1).unwrap_or(0.0),
@@ -5917,6 +5946,10 @@ impl Renderer {
                 0.0,
             ],
             eye: eye_off.extend(0.0).to_array(),
+            // x how bright an LED panel's dots burn (see `MaterialExtra::led`; the settings'
+            // 16 levels give 0 = off .. 3.75), y whether the LED panels' `\S:n` masks keep
+            // their mip chain (0: at full resolution, the dots stay visible when small)
+            led: [lighting.led_glow, if lighting.led_mips { 1.0 } else { 0.0 }, 0.0, 0.0],
         };
         self.queue
             .write_buffer(&self.enh_buf, 0, bytemuck::bytes_of(&u));
@@ -8488,7 +8521,12 @@ impl Renderer {
                 ],
                 // darker: the eye takes a few seconds; brighter: under one
                 b: [secs(2.5), secs(0.6), m[1], m[4]],
-                c: [m[0], m[5], self.exposure.map(f32::exp).unwrap_or(1.0), 0.0],
+                // (w: an LED panel's dots count for this much in the glow's source. The mix
+                // the glow lands with is a few per cent - a lamp a hundred times brighter
+                // than white spreads, a white wall does not - so the dots are multiplied up
+                // there instead of being drawn burning: their halo shows, they don't bleach.
+                // `Led glow`, 0 = not at all.)
+                c: [m[0], m[5], self.exposure.map(f32::exp).unwrap_or(1.0), lighting.led_glow * 10.0],
             };
             self.queue
                 .write_buffer(&self.post_buf, 0, bytemuck::bytes_of(&pu));

@@ -261,8 +261,9 @@ fn perturb_normal(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tn: vec3<f32>) -> v
     return safe_normal(t * k * tn.x + b * k * tn.y + n * max(tn.z, 0.05));
 }
 
-// The enhanced pass's two targets: the picture, and the screen mask (1 on the bus's own
-// screens, carried by the coverage of what is drawn over them; see MASK_FORMAT).
+// The enhanced pass's two targets: the picture, and the screen mask (r: 1 on the bus's own
+// screens, carried by the coverage of what is drawn over them; g: 1 on an LED panel's own
+// dots, see MASK_FORMAT).
 struct EnhancedOut {
     @location(0) color: vec4<f32>,
     @location(1) mask: vec4<f32>,
@@ -272,9 +273,12 @@ struct EnhancedOut {
 fn fs_enhanced(in: VsOut) -> EnhancedOut {
     let c = shade_enhanced(in);
     let screen = material.flags.x > 0.5;
+    // an LED panel's dots stay in the glow's source (`post.wgsl`), the other screens'
+    // letters stay out of it
+    let led = select(0.0, 1.0, material.emissive.w < -1.5);
     var out: EnhancedOut;
     out.color = c;
-    out.mask = vec4<f32>(select(0.0, 1.0, screen), 0.0, 0.0, select(c.a, 1.0, screen));
+    out.mask = vec4<f32>(select(0.0, 1.0, screen), led, 0.0, select(c.a, 1.0, screen));
     return out;
 }
 
@@ -315,7 +319,12 @@ fn shade_enhanced(in: VsOut) -> vec4<f32> {
         tex = vec4<f32>(clamp(tex.rgb * det.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), tex.a);
     }
     if (material.params.z > 0.5) {
-        let tm = textureSample(t_trans, s_diffuse, buv);
+        // (an LED panel with the mip path switched off - `Lighting::led_mips` - takes its
+        // `\S:n` mask at full resolution: its dots stay dots when the panel is small)
+        var tm = textureSample(t_trans, s_diffuse, buv);
+        if (material.emissive.w < -1.5 && enh.led.y < 0.5) {
+            tm = textureSampleLevel(t_trans, s_diffuse, buv, 0.0);
+        }
         tex.a = select(1.0, tm.a, material.params.w > 0.5);
         if (terrain && material.params.x > 1.5) {
             let lum = dot(tex.rgb, vec3<f32>(0.333, 0.333, 0.333));
@@ -454,9 +463,10 @@ fn shade_enhanced(in: VsOut) -> vec4<f32> {
         // read as metalness it made a Golf's bonnet a mirror, in which the envmap photo's
         // trees stood as contour lines across the paint at close range.
         let masked = (u32(material.params2.w + 0.5) & 1u) != 0u;
-        metal = select(0.0, smoothstep(0.3, 0.85, refl), masked);
+        let metal_ok = (u32(material.params2.w + 0.5) & 4u) != 0u;
+        metal = select(0.0, smoothstep(0.3, 0.85, refl), masked || metal_ok);
         f0 = mix(vec3<f32>(clamp(refl, 0.02, 0.08)), mix(albedo, vec3<f32>(1.0), 0.4) * refl, metal);
-        rough = mix(max(0.3 - 0.12 * smoothstep(0.0, 0.25, refl), select(0.22, 0.0, masked)), 0.14, metal);
+        rough = mix(max(0.3 - 0.12 * smoothstep(0.0, 0.25, refl), select(0.22, 0.0, masked || metal_ok)), 0.14, metal);
     } else if (!thin && material.specular.w > 0.0 && dot(material.specular.rgb, vec3<f32>(1.0)) > 0.05) {
         // the o3d material's Blinn-Phong power as GGX roughness
         rough = clamp(sqrt(sqrt(2.0 / (material.specular.w + 2.0))), 0.4, 0.9);
@@ -747,7 +757,15 @@ fn shade_enhanced(in: VsOut) -> vec4<f32> {
         let left = (vec3<f32>(1.0) - clamp(cabin_light, vec3<f32>(0.0), vec3<f32>(1.0))) * (0.12 + 0.88 * night);
         emit = emit + tex.rgb * lm * left * clamp(in.params2.x, 0.0, 1.0) * max(enh.exposure.z * 2.0, 0.6);
     }
-    if (material.emissive.w < -0.5) {
+    if (material.emissive.w < -1.5) {
+        // an LED panel (see MaterialExtra::led): the lit dots - the alpha the `\S:n` script
+        // texture carries, in the colour of the panel's own texture - are the panel's own
+        // light, drawn as bright as the settings ask for (`Led glow`, 16 levels, 0 = off).
+        // The glow takes them where it leaves every other screen out of its source
+        // (`post.wgsl`) and blooms a halo around the panel. (Kept at their own brightness
+        // however the metering treats the scene, as a display's text is.)
+        emit = emit + tex.rgb * enh.led.x * alpha * max(enh.exposure.z * 2.0, 0.8);
+    } else if (material.emissive.w < -0.5) {
         // a display's text (see MaterialExtra::display)
         emit = emit + tex.rgb * 0.35 * max(enh.exposure.z * 2.0, 0.8);
     }

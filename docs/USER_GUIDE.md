@@ -193,7 +193,11 @@ and upscaled), `post_aa` (`fxaa`, the enhanced renderer's, or `off`), `view_dist
 how far the tiles are kept loaded), `texture_memory` (MB - OMSI's `texmemlimit` is read
 under that name too; an eighth of the machine's memory when unset), `texture_compression`
 (BC1-BC3 on the GPU, on by default), `reflections` (the materials' reflection maps,
-`[matl_envmap]` - off, paint, chrome and glass mirror nothing), `mouse_sens` (mouse steering,
+`[matl_envmap]` - off, paint, chrome and glass mirror nothing), `led_glow` (0..15: how
+bright an LED destination matrix's dots burn in the enhanced picture, 0 = off - they are
+the panel's own light, and the glow draws a halo around them), `led_mips` (the LED
+matrices' masks keep the mip chain `STFilter` asks for; off, they are sampled at full
+resolution and stay dots at a distance, which shimmers a little), `mouse_sens` (mouse steering,
 1 = OMSI's), `steering_linear` and `old_steering` (the two steering switches above),
 `ff_invert` (force feedback the other way round), `wheel_range` (the wheel's own rotation,
 lock to lock, 900° by default) and `wheel_lock` (how far it is turned for the bus's full

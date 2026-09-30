@@ -774,8 +774,14 @@ impl RigidBody {
                     // origin's plane, 0x7a0985 - a wheel that sank through a face at a joint of
                     // two surfaces, or into a bridge deck, found nothing within reach, the
                     // spring let go and the bus fell through the world)
-                    let under = probe(hub0.x, hub0.y, top).below.or_else(|| probe(hub0.x, hub0.y, hub0.z - r as f64 + 3.0).below);
-                    let t = under.map(|g| ((g + r as f64 - hub0.z) / up.z.max(0.3) as f64) as f32);
+                    // The spring's point is where Omsi.exe puts it (0x7e47aa): on the model's
+                    // origin plane (z = 0) under the wheel, and its height over the ground is
+                    // measured straight up. Measured from the hub less the `.bus` file's tyre
+                    // radius instead, a mod whose tyre mesh is larger than that radius stood
+                    // with its wheels drawn sunk a few centimetres into the road.
+                    let plane0 = position + rot.mul_vec3(Vec3::new(w.attach.x, w.attach.y, 0.0) - cog).as_dvec3();
+                    let under = probe(plane0.x, plane0.y, top).below.or_else(|| probe(plane0.x, plane0.y, plane0.z + 3.0).below);
+                    let t = under.map(|g| (g - plane0.z) as f32);
                     if let Some(g) = under {
                         w.ground_z = g;
                         w.ground_seen = true;

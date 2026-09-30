@@ -113,7 +113,9 @@ impl Ambience {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_ascii_lowercase())
                     .unwrap_or_default();
-                n.starts_with("step") && n.ends_with(".wav")
+                // (not `Step_St_*`, steps on a stair: every step of the crowd sounded as if
+                // it climbed one)
+                n.starts_with("step") && n.ends_with(".wav") && !n.starts_with("step_st")
             })
             .collect();
         files.sort();
@@ -250,6 +252,11 @@ impl Ambience {
         for f in footfalls {
             if self.step_budget < 1.0 {
                 break;
+            }
+            // (the samples are steps on a bus's floor, `Sounds\Passengers` - the passengers'
+            // sound in OMSI; people in the street walked with them as if still aboard, #236)
+            if !f.inside {
+                continue;
             }
             let d = (f.position - listener).length();
             if d > self.step_range as f64 * 12.0 {

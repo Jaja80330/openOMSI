@@ -375,6 +375,15 @@ fn settings_columns(ui: &mut Ui, s: &mut Value, dirty: &mut f32, body: Rect, upd
         toggle_setting(ui, s, dirty, row(&mut y), "Sun shadows", "shadows");
         sel_setting(ui, s, dirty, "s-casters", row(&mut y), "Shadows cast by", "shadow_casters", &[("all", "Every solid mesh"), ("omsi", "[shadow] meshes, as OMSI")]);
         toggle_setting(ui, s, dirty, row(&mut y), "Detail texturing up close", "detail_textures");
+        // (an LED panel's dots are its own light: how bright they burn, and whether their
+        // mask keeps the mip chain `STFilter` asks for - off keeps them dots when the panel
+        // is small, at the cost of the shimmer the chain exists to prevent)
+        let mut led = get(s, "led_glow").as_i64().unwrap_or(6) as f32;
+        if ui.slider("s-led", row(&mut y), &mut led, 0.0, 15.0, 1.0, "LED glow", &|v| if v < 0.5 { "Off".to_string() } else { format!("{}", v as i64) }) {
+            s["led_glow"] = json!(led.round() as i64);
+            *dirty = 0.3;
+        }
+        toggle_setting(ui, s, dirty, row(&mut y), "LED masks keep their mipmaps", "led_mips");
     }
     toggle_setting(ui, s, dirty, row(&mut y), "Reflection maps (paint, chrome, glass)", "reflections");
     // (a Mac has Metal only; elsewhere a driver's Vulkan that misbehaves, or a card without
