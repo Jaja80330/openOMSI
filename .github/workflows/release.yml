@@ -232,7 +232,7 @@ jobs:
           path: out/*.apk
 
   release:
-    if: github.event_name != 'pull_request'
+    if: false  # branche de test NEROSY : pas de publication
     needs: [version, windows, macos, linux, android]
     runs-on: ubuntu-latest
     permissions:
