@@ -160,7 +160,7 @@ pub struct Launcher {
     discord: Option<crate::discord::Discord>,
     #[cfg(not(target_os = "android"))]
     discord_next_try: Instant,
-    /// The title screen, when the launcher is the menu of the one full screen window.
+    /// The title screen, when the launcher is the game's menu (Big Picture).
     title: title::Title,
     /// The one window: a drive is being made - the loading screen, and how many frames of it
     /// were put on the screen.
@@ -1107,7 +1107,7 @@ impl Launcher {
         } else if self.title.open {
             title::draw(self);
         } else {
-        // the game's menu (one full screen window): the page as a screen of it, no rail
+        // the game's menu (Big Picture): the page as a screen of it, no rail
         let game = title::enabled();
         if game {
             title::back_from_page(self);
