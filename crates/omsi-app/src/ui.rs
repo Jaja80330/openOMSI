@@ -1438,6 +1438,102 @@ impl Ui {
         x0
     }
 
+    /// The game menu as a game's pause screen (the one full screen window, see `shell.rs`):
+    /// the picture darkened, the game's name and "Paused" large, the lines in a column in the
+    /// middle - the lit one framed - and the keys along the bottom, as the main menu has them.
+    /// The lines' rects go to `menu_rects` as the card's do: the mouse and the keys work alike.
+    fn draw_pause(&mut self, r: &Renderer, scene: &mut Scene, f: &Frame, sel: usize, items: &[(&str, &str)], s: f32) {
+        let (w, h) = (f.width, f.height);
+        // the picture darkened (the card's dimming, and more), a little more behind the column
+        let dim = self.text.plate(r, scene, 6);
+        scene.overlays.push((dim, [0.0, 0.0, w, h]));
+        self.text.rounded(r, scene, [0.0, 0.0, w, h], 0.0, [6, 7, 9, 150]);
+        let col_w = (400.0 * s).min(w - 48.0 * s);
+        let x = ((w - col_w) * 0.5).round();
+        let band = 70.0 * s;
+        self.text.rounded(r, scene, [x - band, 0.0, x + col_w + band, h], 0.0, [0, 0, 0, 70]);
+        // the title
+        let eyebrow = self.text.label(r, scene, "OPENOMSI", (13.0 * s) as u32 | BOLD, MUTED);
+        let title = omsi_ui::tr(if f.paused { "Paused" } else { "Menu" }).to_uppercase();
+        let t = self.text.label(r, scene, &title, (58.0 * s) as u32 | BOLD, WHITE);
+        let ty = (h * 0.13).round();
+        scene.overlays.push((eyebrow.tex, [(w - eyebrow.w as f32) * 0.5, ty, (w + eyebrow.w as f32) * 0.5, ty + eyebrow.h as f32]));
+        let ty = ty + eyebrow.h as f32 + 4.0 * s;
+        scene.overlays.push((t.tex, [(w - t.w as f32) * 0.5, ty, (w + t.w as f32) * 0.5, ty + t.h as f32]));
+        // the lines: as tall as fits between the title and the keys
+        let top = ty + t.h as f32 + 36.0 * s;
+        let groups = items.iter().filter(|(id, _)| matches!(*id, "save" | "admin" | "quit")).count() as f32;
+        let gap_group = 12.0 * s;
+        let room = h - top - 110.0 * s - groups * gap_group;
+        let n = items.len().max(1);
+        let row_h = (44.0 * s).min(room / n as f32).max(28.0 * s);
+        self.menu_start = 0;
+        self.menu_rows = n;
+        self.menu_row_h = row_h;
+        let px = ((17.0 * s).min(row_h * 0.46)) as u32;
+        let over = |rect: [f32; 4]| f.cursor.0 >= rect[0] && f.cursor.0 <= rect[2] && f.cursor.1 >= rect[1] && f.cursor.1 <= rect[3];
+        let mut y = top;
+        let mut rects = Vec::with_capacity(n);
+        for (k, &(id, _)) in items.iter().enumerate() {
+            if k > 0 && matches!(id, "save" | "admin" | "quit") {
+                y += gap_group;
+            }
+            rects.push([x, y, x + col_w, y + row_h - 6.0 * s]);
+            y += row_h;
+        }
+        let any_hovered = rects.iter().any(|rc| over(*rc));
+        for (k, &(id, label)) in items.iter().enumerate() {
+            let rect = rects[k];
+            let off = f.menu_disabled.contains(&id);
+            let lit = !off && (over(rect) || (k == sel && !any_hovered));
+            let glow = self.easeq((7, id, k), if lit { 1.0 } else { 0.0 }, 1.0 / FADE_SECS);
+            // (back to the main menu is no danger: leaving the program is)
+            let danger = id == "quitall";
+            if glow > 0.0 {
+                // the frame round the lit line: a faint fill and a fine light edge
+                let a = (glow * 255.0) as u8;
+                let t = 1.5 * s;
+                self.text.rounded(r, scene, rect, 3.0 * s, [255, 255, 255, (glow * 16.0) as u8]);
+                let edge = if danger { [240, 120, 108, a] } else { [236, 236, 236, (glow * 215.0) as u8] };
+                self.text.rounded(r, scene, [rect[0], rect[1], rect[2], rect[1] + t], 0.0, edge);
+                self.text.rounded(r, scene, [rect[0], rect[3] - t, rect[2], rect[3]], 0.0, edge);
+                self.text.rounded(r, scene, [rect[0], rect[1], rect[0] + t, rect[3]], 0.0, edge);
+                self.text.rounded(r, scene, [rect[2] - t, rect[1], rect[2], rect[3]], 0.0, edge);
+            }
+            let ink = if off {
+                OFF_INK
+            } else if danger {
+                mix([232, 138, 128, 0], [255, 176, 166, 0], glow)
+            } else {
+                mix(SOFT, WHITE, glow)
+            };
+            let (text, more) = strip_more(label);
+            let shown = if more { format!("{text}  ›") } else { text.to_string() };
+            let l = self.text.label(r, scene, &shown, if lit { px | BOLD } else { px }, ink);
+            let cy = (rect[1] + rect[3]) * 0.5;
+            let lx = ((rect[0] + rect[2]) * 0.5 - l.w as f32 * 0.5).round();
+            scene.overlays.push((l.tex, [lx, cy - l.h as f32 * 0.5, lx + l.w as f32, cy + l.h as f32 * 0.5]));
+            self.menu_rects.push(rect);
+        }
+        // the keys, along the bottom
+        if !crate::platform::touch_controls() {
+            let cy = h - 48.0 * s;
+            let keys = [("Esc", omsi_ui::tr("Resume").into_owned()), ("Enter", omsi_ui::tr("Select").into_owned()), ("↑ ↓", omsi_ui::tr("Move").into_owned())];
+            let kpx = (13.0 * s) as u32;
+            let widths: Vec<f32> = keys.iter().map(|(k, t)| self.text.width(k, 12.0 * s) + 18.0 * s + 10.0 * s + self.text.width(t, 13.0 * s)).collect();
+            let gap = 36.0 * s;
+            let total: f32 = widths.iter().sum::<f32>() + gap * (keys.len() - 1) as f32;
+            let mut kx = (w - total) * 0.5;
+            for ((k, t), wd) in keys.iter().zip(&widths) {
+                let kw = self.text.width(k, 12.0 * s) + 18.0 * s;
+                let left = self.chip(r, scene, k, (12.0 * s) as u32 | BOLD, WHITE, [30, 30, 30, 220], true, kx + kw, cy, s);
+                let _ = left;
+                self.put(r, scene, t, kpx, SOFT, kx + kw + 10.0 * s, cy);
+                kx += wd + gap;
+            }
+        }
+    }
+
     /// The game menu and its lists (options, lines, tours ...): a card in the middle of a
     /// dimmed picture. Options are settings lines with switches and values; lines and tours
     /// are bigger lines with the timetable of the chosen one beside them.
@@ -1469,6 +1565,13 @@ impl Ui {
         }
         let s = menu_scale(f);
         let kind = f.menu_kind;
+        // the one full screen window: the game menu itself as the pause screen of a game,
+        // the same look as the main menu (its lists keep their card)
+        if kind == MenuKind::Game && f.menu_head.is_none() && !f.vr && crate::platform::single_window() {
+            self.draw_pause(r, scene, f, sel, items, s);
+            self.menu_overlay_range = overlay_start..scene.overlays.len();
+            return;
+        }
         // the picture dimmed behind the menu (the first overlay: the headset's menu takes it
         // for the backdrop)
         let dim = self.text.plate(r, scene, 6);
