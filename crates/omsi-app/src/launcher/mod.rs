@@ -162,6 +162,11 @@ pub struct Launcher {
     discord_next_try: Instant,
     /// The title screen, when the launcher is the menu of the one full screen window.
     title: title::Title,
+    /// The one window: a drive is being made - the loading screen, and how many frames of it
+    /// were put on the screen.
+    loading: bool,
+    loading_frames: u32,
+    loading_since: Instant,
 }
 
 /// Run the launcher window until it is closed.
@@ -188,6 +193,9 @@ impl Launcher {
         page: Page::Drive,
         page_anim: 1.0,
         title: title::Title::new(),
+        loading: false,
+        loading_frames: 0,
+        loading_since: Instant::now(),
         drive: drive::DriveView::default(),
         phone: phone::PhoneView::default(),
         pages: pages::PagesView::default(),
@@ -302,6 +310,32 @@ impl Launcher {
         self.map_gen = 0;
         self.mapview.drop_gpu();
         self.icons.clear();
+    }
+
+    /// The one window: a drive was asked for - the loading screen from the next frame.
+    pub fn begin_loading(&mut self) {
+        self.loading = true;
+        self.loading_frames = 0;
+        self.loading_since = Instant::now();
+        self.last_input = Instant::now();
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+    }
+
+    /// The loading screen is on the screen (shown a few frames, a quarter of a second: the
+    /// screen has it for sure): the drive may hold the window now.
+    pub fn loading_shown(&self) -> bool {
+        self.loading && self.loading_frames >= 2 && self.loading_since.elapsed().as_secs_f32() >= 0.25
+    }
+
+    /// The drive is made (its window takes over), or it could not be (`failed`: why).
+    pub fn end_loading(&mut self, failed: Option<String>) {
+        self.loading = false;
+        self.loading_frames = 0;
+        if let Some(why) = failed {
+            self.state.set_status(why, true);
+        }
     }
 
     /// The window, its surface and the renderer, given up for the game (a phone plays in the
@@ -723,6 +757,11 @@ impl Launcher {
     /// Whether the launcher gives the graphics device up while a game runs (#834: the setting
     /// "The launcher rests while a game runs"; on by default).
     fn rests(&self) -> bool {
+        // (the game's menu in the one window plays the drives in its own window: nothing to
+        // give up for them, and its loading screen has to be drawn)
+        if title::enabled() {
+            return false;
+        }
         self.state.settings.get("launcher_rest").and_then(|v| v.as_bool()).unwrap_or(true)
     }
 
@@ -925,6 +964,9 @@ impl Launcher {
         }
         window.pre_present_notify();
         frame.present();
+        if self.loading {
+            self.loading_frames += 1;
+        }
         self.check_exit(event_loop);
     }
 
@@ -1060,6 +1102,8 @@ impl Launcher {
                 self.phone.page = Some(Page::Setup);
             }
             phone::draw(self);
+        } else if self.loading && title::enabled() {
+            title::draw_loading(self);
         } else if self.title.open {
             title::draw(self);
         } else {

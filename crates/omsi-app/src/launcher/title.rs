@@ -262,6 +262,60 @@ pub(super) fn back_from_page(l: &mut Launcher) {
 }
 
 // ---------------------------------------------------------------------------------------
+// The loading screen: a drive is being made. It is the last picture the window shows until
+// the game's own loading screen takes over (making the game holds the window meanwhile).
+
+const TIPS: [&str; 6] = [
+    "Escape opens the game menu: options, the city map, the line and tour, the main menu.",
+    "Kneel the bus at the stops: passengers with prams and wheelchairs get on more easily.",
+    "Keep to the timetable: the profile counts how early or late you were at every stop.",
+    "The city map shows where you are and the stops of your line.",
+    "Settings → Driving: an automatic clutch and gearbox for a first drive.",
+    "In multiplayer, the code of your session lets friends join your game.",
+];
+
+pub(super) fn draw_loading(l: &mut Launcher) {
+    let size = l.ui.size;
+    let full = Rect::new(0.0, 0.0, size.x, size.y);
+    l.ui.solid(full);
+    l.ui.p().rect(full, Color::rgba(8, 9, 11, 1.0));
+    if !l.state.choice.bus.is_empty() {
+        l.preview_rect = Some(full);
+        if let (Some(tex), true) = (l.preview_tex, l.showroom.has_picture()) {
+            l.ui.image_tinted(full, tex, 0.0, Color::rgba(70, 70, 75, 1.0));
+        }
+    }
+    let (bottom, _) = full.cut_bottom(size.y * 0.5);
+    l.ui.p().gradient(bottom, Color::rgba(0, 0, 0, 0.0), Color::rgba(0, 0, 0, 0.8));
+    let x = 64.0;
+    let y = size.y - 230.0;
+    l.ui.text_in("Loading", Rect::new(x, y, size.x * 0.6, 22.0), 14.0, Weight::Bold, ACCENT, Align::Left);
+    let map = l.state.map().map(|m| m.name.clone()).unwrap_or_default();
+    l.ui.text_in(&map, Rect::new(x, y + 24.0, size.x - 2.0 * x, 60.0), 46.0, Weight::Black, TEXT, Align::Left);
+    let mut sub = l.state.bus().map(|b| b.name.clone()).unwrap_or_default();
+    let c = &l.state.choice;
+    if let (Some(line), Some(tour), false) = (c.line.as_ref(), c.tour.as_ref(), c.free) {
+        sub.push_str(&format!(" · {} {line} / {tour}", omsi_ui::tr("Line")));
+    }
+    l.ui.text_in(&sub, Rect::new(x, y + 86.0, size.x - 2.0 * x, 24.0), 16.0, Weight::Medium, TEXT_SOFT, Align::Left);
+    // a bar that runs while the drive is made (the window stands still for a while then:
+    // this picture is the one that stays)
+    let bar = Rect::new(x, y + 126.0, (size.x - 2.0 * x).min(520.0), 3.0);
+    l.ui.p().rect(bar, Color::rgba(255, 255, 255, 0.12));
+    let run = (l.ui.time * 0.6).fract();
+    let seg = bar.w * 0.28;
+    let sx = bar.x + (bar.w + seg) * run - seg;
+    let (a, b) = (sx.max(bar.x), (sx + seg).min(bar.right()));
+    if b > a {
+        l.ui.p().rect(Rect::new(a, bar.y, b - a, bar.h), ACCENT);
+    }
+    // a tip, one per drive
+    let tip = TIPS[(l.state.choice.time.unsigned_abs() as usize + map.len()) % TIPS.len()];
+    l.ui.text_in(tip, Rect::new(x, size.y - 64.0, size.x - 2.0 * x, 22.0), 13.0, Weight::Regular, TEXT_DIM, Align::Left);
+    l.ui.text_in(crate::startup::VERSION, Rect::new(size.x - 260.0, size.y - 34.0, 236.0, 20.0), 12.0, Weight::Regular, TEXT_DIM, Align::Right);
+}
+
+// ---------------------------------------------------------------------------------------
 // The pages, as screens of the game's menu: the same picture behind them as the title
 // screen, a header with the way back, the page's name and the other pages, the keys along
 // the bottom; the page itself in the middle, as it is.

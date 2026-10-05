@@ -536,6 +536,11 @@ impl App {
         self.scene = Some(scene);
         // fully specified runs skip the menu
         if self.args.bus.is_some() || self.args.cam.is_some() || self.args.no_menu {
+            // (the one window: its first picture is the loading screen, which stays while the
+            // world is read - not a black or a stale one)
+            if crate::platform::single_window() {
+                self.still_frame(&omsi_ui::tr("Loading"));
+            }
             self.load_world_now(event_loop);
         } else {
             let mut fonts = omsi_sim::texttex::FontLibrary::new(&self.args.root);
@@ -981,6 +986,30 @@ impl App {
             }
         }
         false
+    }
+
+    /// One picture of the loading screen with `title` (the one window: the session being
+    /// written and the world let go, which holds the window for a moment).
+    pub(crate) fn still_frame(&mut self, title: &str) {
+        let (Some(renderer), Some(mut scene)) = (self.renderer.take(), self.scene.take()) else { return };
+        let mut renderer = renderer;
+        if let (Some(ui), Some(s), Some(win)) = (self.ui.as_mut(), self.surface.as_ref(), self.window.as_ref()) {
+            scene.overlays.clear();
+            let dpi = win.scale_factor() as f32;
+            let scale = dpi * crate::ui::size_factor(s.config.height as f32, dpi, self.settings.ui_scale, self.settings.ui_scale_window);
+            ui.loading(&renderer, &mut scene, s.config.width as f32, s.config.height as f32, scale, title, "", 1.0);
+            if let wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) = s.surface.get_current_texture() {
+                let view = frame.texture.create_view(&Default::default());
+                let blank = Camera { position: DVec3::new(0.0, 0.0, -1.0e6), yaw: 0.0, pitch: -89.0, roll: 0.0, fov_deg: 60.0, near: 0.5, far: 10.0 };
+                let lighting = omsi_render::Lighting { sky_color: glam::Vec3::new(0.08, 0.10, 0.14), ..Default::default() };
+                renderer.render(&mut scene, &view, s.config.width, s.config.height, &blank, &lighting);
+                win.pre_present_notify();
+                frame.present();
+            }
+            scene.overlays.clear();
+        }
+        self.renderer = Some(renderer);
+        self.scene = Some(scene);
     }
 
     /// Stream the tiles around the camera and the player's bus (whose ground must stay when
