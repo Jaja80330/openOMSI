@@ -368,6 +368,11 @@ impl Ui {
 
     /// The mouse is over `r` (and not over an open dropdown lying above it, nor outside the
     /// current clip).
+    /// A list or a date picker is open (Escape closes it, not the page).
+    pub fn popup_open(&self) -> bool {
+        self.popup.is_some() || self.date_popup.is_some()
+    }
+
     pub fn hover(&self, r: Rect) -> bool {
         let m = self.input.mouse;
         if !r.contains(m) || !self.clip_now().contains(m) {
@@ -388,11 +393,16 @@ impl Ui {
 
     /// A picture of texture `tex` (a render target) filling `r`, its corners rounded.
     pub fn image(&mut self, r: Rect, tex: usize, radius: f32) {
+        self.image_tinted(r, tex, radius, Color::WHITE);
+    }
+
+    /// The same, its colours multiplied by `tint` (a picture darkened behind a menu).
+    pub fn image_tinted(&mut self, r: Rect, tex: usize, radius: f32, tint: Color) {
         let clip = intersect(self.clip_now(), r);
         self.push_layer(clip, radius);
         self.layers.last_mut().unwrap().2 = tex;
         let sprite = omsi_ui::Sprite { uv: [0.0, 0.0, 1.0, 1.0], w: r.w, h: r.h, ascent: 0.0 };
-        self.p().sprite(sprite, Vec2::new(r.x, r.y), Vec2::new(r.w, r.h), Color::WHITE);
+        self.p().sprite(sprite, Vec2::new(r.x, r.y), Vec2::new(r.w, r.h), tint);
         let (c, rad) = self.clip_stack.last().copied().unwrap_or((Rect::new(0.0, 0.0, self.size.x, self.size.y), 0.0));
         self.push_layer(c, rad);
     }

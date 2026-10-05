@@ -20,6 +20,7 @@ mod state;
 pub(crate) use state::crash_of;
 mod theme;
 mod timetable;
+mod title;
 mod ui;
 mod update;
 
@@ -159,6 +160,8 @@ pub struct Launcher {
     discord: Option<crate::discord::Discord>,
     #[cfg(not(target_os = "android"))]
     discord_next_try: Instant,
+    /// The title screen, when the launcher is the menu of the one full screen window.
+    title: title::Title,
 }
 
 /// Run the launcher window until it is closed.
@@ -184,6 +187,7 @@ impl Launcher {
         showroom: showroom::Showroom::new(),
         page: Page::Drive,
         page_anim: 1.0,
+        title: title::Title::new(),
         drive: drive::DriveView::default(),
         phone: phone::PhoneView::default(),
         pages: pages::PagesView::default(),
@@ -315,6 +319,9 @@ impl Launcher {
     /// Back from a game: the window again (the launcher draws into it from the next resume).
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub fn adopt_window(&mut self, window: Arc<Window>) {
+        if title::enabled() {
+            self.title.show();
+        }
         self.window = Some(window);
         self.surface = None;
         self.renderer = None;
@@ -385,7 +392,7 @@ impl ApplicationHandler for Launcher {
             attrs = attrs.with_active(false);
         }
         // the launcher as the game's menu (see `shell.rs`): the whole screen, as the game
-        if omsi_launcher_lib::in_process_games() && !mobile::mobile() {
+        if omsi_launcher_lib::in_process_games() && !mobile::mobile() && asked.is_none() {
             attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
         }
         let window = match event_loop.create_window(attrs) {
@@ -922,7 +929,7 @@ impl Launcher {
     }
 
     fn check_exit(&mut self, event_loop: &ActiveEventLoop) {
-        if self.exit_after.map(|e| self.started.elapsed().as_secs_f32() >= e).unwrap_or(false) {
+        if self.title.quit || self.exit_after.map(|e| self.started.elapsed().as_secs_f32() >= e).unwrap_or(false) {
             event_loop.exit();
         }
     }
@@ -1049,7 +1056,12 @@ impl Launcher {
                 self.phone.page = Some(Page::Setup);
             }
             phone::draw(self);
+        } else if self.title.open {
+            title::draw(self);
         } else {
+        if title::enabled() {
+            title::back_from_page(self);
+        }
         let rail_w = RAIL_W;
         self.page_anim = (self.page_anim + self.ui.dt / 0.15).min(1.0);
         // (no wider than a page reads well: on a wide screen the rest is margin, the page
@@ -1247,6 +1259,21 @@ impl Launcher {
         self.ui.text("openOMSI", Vec2::new(24.0, 46.0), 20.0, Weight::Bold, TEXT, Align::Left);
         self.ui.text(crate::startup::VERSION, Vec2::new(24.0, 64.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
         let mut y = 96.0;
+        if title::enabled() {
+            let r = Rect::new(12.0, y, RAIL_W - 24.0, 38.0);
+            let (h, _, clicked) = self.ui.interact(ui::id_of("nav-title"), r);
+            if clicked {
+                self.title.show();
+            }
+            if h {
+                self.ui.p().rounded(r, 6.0, HOVER);
+            }
+            let c = if h { TEXT } else { TEXT_SOFT };
+            self.ui.icon("arrow_back", Vec2::new(r.x + 20.0, r.center().y), 18.0, c);
+            self.ui.text_in("Main menu", Rect::new(r.x + 40.0, r.y, r.w - 50.0, r.h), 13.5, Weight::Medium, c, Align::Left);
+            self.ui.text_in("Esc", Rect::new(r.right() - 40.0, r.y, 30.0, r.h), 11.0, Weight::Bold, TEXT_FAINT, Align::Right);
+            y += 50.0;
+        }
         let running = self.state.instances.iter().filter(|i| i.running).count();
         let jobs = self.state.jobs.iter().filter(|j| j.finished.is_none()).count();
         for (p, name, icon) in PAGES {
