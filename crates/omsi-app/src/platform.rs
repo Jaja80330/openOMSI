@@ -21,6 +21,17 @@ pub(crate) fn set_single_window() {
     SINGLE_WINDOW.store(true, Ordering::Relaxed);
 }
 
+/// No "not responding" ghost over the window (Windows draws one, and offers to close the
+/// program, when the window has not looked at its messages for five seconds: a drive being
+/// made or written in the one window, a loading screen on it).
+pub(crate) fn no_ghosting() {
+    #[cfg(windows)]
+    // SAFETY: a plain call without arguments, for this process
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::DisableProcessWindowsGhosting();
+    }
+}
+
 /// The launcher is the game's menu in this window (a session ends back in it).
 pub(crate) fn single_window() -> bool {
     SINGLE_WINDOW.load(Ordering::Relaxed)

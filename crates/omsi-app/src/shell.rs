@@ -52,12 +52,18 @@ struct Shell {
     game: Option<Box<App>>,
     /// The window was closed during a drive: once the session is written, the program ends.
     quit: bool,
+    /// A drive asked for: it starts once the menu's loading screen is on the screen (making
+    /// the game holds the window for seconds; the loading screen stays up meanwhile).
+    pending: Option<Vec<String>>,
 }
 
 /// Run the launcher as the game's menu until the window is closed.
 pub(crate) fn run(instance: wgpu::Instance) -> Result<()> {
     crate::platform::set_single_window();
     omsi_launcher_lib::set_in_process_games(true);
+    // (the window shows a loading screen while a drive is made or written: Windows' "not
+    // responding" ghost over it, and its offer to close the program, would only be wrong)
+    crate::platform::no_ghosting();
     log::info!("one window: the launcher is the game's menu, the drives play in it");
     let event_loop = EventLoop::new()?;
     // SIGTERM and Ctrl+C end a drive the way Escape does (see quit.rs)
@@ -65,7 +71,7 @@ pub(crate) fn run(instance: wgpu::Instance) -> Result<()> {
     quit::install(move |_| {
         let _ = proxy.send_event(());
     });
-    let mut shell = Shell { launcher: Box::new(launcher::Launcher::new(instance)), game: None, quit: false };
+    let mut shell = Shell { launcher: Box::new(launcher::Launcher::new(instance)), game: None, quit: false, pending: None };
     let r = event_loop.run_app(&mut shell);
     lan_mods::clean_up();
     r?;
@@ -85,6 +91,9 @@ impl Shell {
                 self.quit = true;
             }
             let mut game = self.game.take().unwrap();
+            // the session is written and the world let go: a loading screen meanwhile, not the
+            // last picture of the drive standing still
+            game.still_frame(&omsi_ui::tr(if self.quit { "Saving…" } else { "Back to the main menu" }));
             game.exiting(event_loop);
             let window = game.window.take();
             drop(game);
@@ -101,13 +110,23 @@ impl Shell {
             self.launcher.resumed(event_loop);
             return;
         }
-        let Some(line) = omsi_launcher_lib::take_in_process_launch() else { return };
+        // a drive asked for: the loading screen first, the drive once it is on the screen
+        if let Some(line) = omsi_launcher_lib::take_in_process_launch() {
+            self.launcher.begin_loading();
+            self.pending = Some(line);
+            return;
+        }
+        if self.pending.is_none() || !self.launcher.loading_shown() {
+            return;
+        }
+        let line = self.pending.take().unwrap();
         log::info!("starting the game: {}", line.join(" "));
         let argv: Vec<String> = std::iter::once("openomsi".to_string()).chain(line).collect();
         let args = match Args::try_parse_from(&argv) {
             Ok(a) => a,
             Err(e) => {
                 log::error!("the launcher's command line: {e}");
+                self.launcher.end_loading(Some(format!("The game could not start: {e}")));
                 return;
             }
         };
@@ -117,12 +136,17 @@ impl Shell {
         });
         let mut app = match game {
             Ok(Some(app)) => app,
-            Ok(None) => return,
+            Ok(None) => {
+                self.launcher.end_loading(None);
+                return;
+            }
             Err(e) => {
                 log::error!("the game could not start: {e:#}");
+                self.launcher.end_loading(Some(format!("The game could not start: {e:#}")));
                 return;
             }
         };
+        self.launcher.end_loading(None);
         let window = self.launcher.release_window();
         app.create_window(event_loop, window);
         self.game = Some(Box::new(app));
