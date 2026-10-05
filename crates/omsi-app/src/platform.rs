@@ -13,9 +13,18 @@ pub const MOBILE: bool = cfg!(target_os = "android");
 /// The session asked to end (a phone: back to the launcher, the program runs on).
 static LEAVE: AtomicBool = AtomicBool::new(false);
 
-/// End the session: the program on a computer, back to the launcher on a phone.
+/// A computer whose launcher is the game's menu in one window (see `shell.rs`): a session
+/// that ends goes back to it, as on a phone.
+static SINGLE_WINDOW: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_single_window() {
+    SINGLE_WINDOW.store(true, Ordering::Relaxed);
+}
+
+/// End the session: the program on a computer, back to the launcher on a phone (and in the
+/// one window of `single_window`).
 pub(crate) fn exit(event_loop: &ActiveEventLoop) {
-    if MOBILE {
+    if MOBILE || SINGLE_WINDOW.load(Ordering::Relaxed) {
         LEAVE.store(true, Ordering::Relaxed);
     } else {
         event_loop.exit();

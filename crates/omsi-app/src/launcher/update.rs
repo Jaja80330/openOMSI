@@ -30,7 +30,7 @@ impl Launcher {
         // (a game started from here is a program of its own on a computer: nothing is put in
         // its place while it runs - once it ends, the update the game downloaded in the
         // background goes in, without a wait)
-        let game_running = !omsi_launcher_lib::IN_PROCESS_GAMES && self.state.instances.iter().any(|i| i.running);
+        let game_running = !omsi_launcher_lib::in_process_games() && self.state.instances.iter().any(|i| i.running);
         if self.update.game_was_running && !game_running && looking {
             log::info!("update: the game has ended - looking for an update");
             self.update.dismissed_version = None;

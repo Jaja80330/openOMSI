@@ -384,6 +384,10 @@ impl ApplicationHandler for Launcher {
         if omsi_cfg::env::var_os("OMSI_BACKGROUND").is_some() {
             attrs = attrs.with_active(false);
         }
+        // the launcher as the game's menu (see `shell.rs`): the whole screen, as the game
+        if omsi_launcher_lib::in_process_games() && !mobile::mobile() {
+            attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {

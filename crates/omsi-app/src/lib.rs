@@ -23,6 +23,8 @@ mod mac_hid;
 #[cfg(target_os = "android")]
 mod android;
 mod platform;
+#[cfg(not(target_os = "android"))]
+mod shell;
 mod touch;
 mod placing;
 mod mt;
@@ -160,7 +162,20 @@ pub fn run() -> Result<()> {
     restart_with_allocator_settings();
     #[cfg(windows)]
     attach_parent_console();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // one window for the launcher and the game (see `shell.rs`): one program, one log file
+    #[cfg(not(target_os = "android"))]
+    let single = shell::wanted();
+    #[cfg(target_os = "android")]
+    #[allow(unused_variables)]
+    let single = false;
+    let mut logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    #[cfg(not(target_os = "android"))]
+    if single {
+        if let Some(f) = shell::log_file() {
+            logger.target(env_logger::Target::Pipe(Box::new(f)));
+        }
+    }
+    logger.init();
     // a panic goes into the log (which the launcher keeps per session) with where it
     // happened and a backtrace, not only to a terminal that may not be there
     let default_hook = std::panic::take_hook();
@@ -195,6 +210,10 @@ pub fn run() -> Result<()> {
             return Ok(());
         }
         launcher_statics();
+        #[cfg(not(target_os = "android"))]
+        if single {
+            return shell::run(graphics_instance());
+        }
         return launcher::run(graphics_instance());
     }
     let Some(app) = make_app(args, server_cfg)? else { return Ok(()) };

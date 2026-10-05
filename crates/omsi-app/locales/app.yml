@@ -25694,3 +25694,17 @@ _version: 2
   it: "l’host ti ha escluso da questa sessione"
   nl: "de host heeft je uit deze sessie gestuurd"
   tr: "ev sahibi seni bu oturumdan attı"
+
+"One full screen window (menu and game, from the next start)":
+  ru: "Одно полноэкранное окно (меню и игра, со следующего запуска)"
+  de: "Ein Vollbildfenster (Menü und Spiel, ab dem nächsten Start)"
+  fr: "Une seule fenêtre plein écran (menu et jeu, au prochain démarrage)"
+  uk: "Одне повноекранне вікно (меню та гра, з наступного запуску)"
+  pl: "Jedno okno pełnoekranowe (menu i gra, od następnego uruchomienia)"
+  cs: "Jedno okno přes celou obrazovku (nabídka a hra, od dalšího spuštění)"
+  es: "Una sola ventana a pantalla completa (menú y juego, desde el próximo inicio)"
+  pt: "Uma única janela em tela cheia (menu e jogo, a partir da próxima inicialização)"
+  pt-pt: "Uma única janela em ecrã inteiro (menu e jogo, a partir do próximo arranque)"
+  it: "Un’unica finestra a schermo intero (menu e gioco, dal prossimo avvio)"
+  nl: "Eén venster op volledig scherm (menu en spel, vanaf de volgende start)"
+  tr: "Tek tam ekran pencere (menü ve oyun, bir sonraki açılıştan itibaren)"
