@@ -261,6 +261,114 @@ pub(super) fn back_from_page(l: &mut Launcher) {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// The pages, as screens of the game's menu: the same picture behind them as the title
+// screen, a header with the way back, the page's name and the other pages, the keys along
+// the bottom; the page itself in the middle, as it is.
+
+/// Height of the header and of the band along the bottom.
+pub(super) const HEADER_H: f32 = 112.0;
+pub(super) const FOOTER_H: f32 = 52.0;
+
+/// The chosen bus behind a page, darker than behind the title screen.
+pub(super) fn page_background(l: &mut Launcher) {
+    let size = l.ui.size;
+    let full = Rect::new(0.0, 0.0, size.x, size.y);
+    l.ui.p().rect(full, Color::rgba(8, 9, 11, 1.0));
+    if !l.state.choice.bus.is_empty() {
+        l.preview_rect = Some(full);
+        if let (Some(tex), true) = (l.preview_tex, l.showroom.has_picture()) {
+            l.ui.image_tinted(full, tex, 0.0, Color::rgba(62, 62, 66, 1.0));
+        }
+    }
+    l.ui.p().rect(full, Color::rgba(0, 0, 0, 0.25));
+}
+
+/// Where a page is laid out: between the header and the keys, no wider than reads well.
+pub(super) fn page_content(sx: f32, sy: f32) -> Rect {
+    let w = (sx - 96.0).min(1640.0);
+    Rect::new((sx - w) * 0.5, HEADER_H + 8.0, w, (sy - HEADER_H - FOOTER_H - 16.0).max(0.0))
+}
+
+/// The header and the band along the bottom, over the page; the page's keys (Q / E: the
+/// page before / after).
+pub(super) fn page_chrome(l: &mut Launcher) {
+    let size = l.ui.size;
+    // --- header: a dark band fading out, the way back, the page's name, the pages
+    let (head, _) = Rect::new(0.0, 0.0, size.x, size.y).cut_top(HEADER_H + 24.0);
+    l.ui.solid(Rect::new(0.0, 0.0, size.x, HEADER_H));
+    l.ui.p().gradient(head, Color::rgba(0, 0, 0, 0.82), Color::rgba(0, 0, 0, 0.0));
+    let back = Rect::new(36.0, 20.0, 230.0, 30.0);
+    let (hover, _, clicked) = l.ui.interact(ui::id_of("page-back"), back);
+    if clicked {
+        l.title.show();
+    }
+    let c = if hover { TEXT } else { TEXT_SOFT };
+    l.ui.text_in("‹", Rect::new(back.x, back.y - 2.0, 16.0, back.h), 22.0, Weight::Bold, c, Align::Left);
+    l.ui.text_in("Main menu", Rect::new(back.x + 20.0, back.y, 120.0, back.h), 14.0, Weight::Medium, c, Align::Left);
+    let cap = Rect::new(back.x + 146.0, back.y + 4.0, 38.0, 22.0);
+    l.ui.p().rounded_border(cap, 3.0, 1.0, TEXT_DIM);
+    l.ui.text_in("Esc", cap, 11.0, Weight::Bold, TEXT_SOFT, Align::Center);
+    let name = super::PAGES.iter().find(|p| p.0 == l.page).map(|p| p.1).unwrap_or("");
+    let title = omsi_ui::tr(name).to_uppercase();
+    l.ui.text_in(&title, Rect::new(36.0, 52.0, size.x * 0.4, 48.0), 38.0, Weight::Black, TEXT, Align::Left);
+    // the pages, right of the name; the open one underlined
+    let n = super::PAGES.len();
+    let tab_w = ((size.x * 0.58) / n as f32).clamp(88.0, 150.0);
+    let x0 = size.x - 36.0 - tab_w * n as f32;
+    for (i, (p, label, _)) in super::PAGES.iter().enumerate() {
+        let r = Rect::new(x0 + i as f32 * tab_w, 58.0, tab_w, 40.0);
+        let (h, _, clicked) = l.ui.interact(ui::id_of(&format!("page-tab-{label}")), r);
+        if clicked {
+            l.go(*p);
+        }
+        let open = l.page == *p;
+        let c = if open { TEXT } else if h { TEXT_SOFT } else { TEXT_DIM };
+        l.ui.text_in(label, r, 13.5, if open { Weight::Bold } else { Weight::Medium }, c, Align::Center);
+        if open {
+            l.ui.p().rect(Rect::new(r.x + 18.0, r.bottom() - 4.0, r.w - 36.0, 3.0), ACCENT);
+        }
+    }
+    l.ui.p().rect(Rect::new(36.0, HEADER_H - 2.0, size.x - 72.0, 1.0), Color::rgba(255, 255, 255, 0.08));
+
+    // --- the band along the bottom: what happened last, the keys, the version
+    let (foot, _) = Rect::new(0.0, 0.0, size.x, size.y).cut_bottom(FOOTER_H + 20.0);
+    l.ui.solid(Rect::new(0.0, size.y - FOOTER_H, size.x, FOOTER_H));
+    l.ui.p().gradient(foot, Color::rgba(0, 0, 0, 0.0), Color::rgba(0, 0, 0, 0.8));
+    let y = size.y - FOOTER_H + 14.0;
+    let (text, err, at) = l.state.status.clone();
+    let fade = if err { 1.0 } else { (1.0 - (at.elapsed().as_secs_f32() - 6.0) / 1.5).clamp(0.0, 1.0) };
+    if !text.is_empty() && fade > 0.0 {
+        let first = text.lines().next().unwrap_or("").to_string();
+        let r = Rect::new(36.0, y, size.x * 0.45, 24.0);
+        l.ui.text_in(&first, r, 13.0, Weight::Regular, (if err { DANGER } else { TEXT_SOFT }).alpha(fade), Align::Left);
+        l.ui.tooltip(r, &text);
+    }
+    let keys = [("Esc", "Main menu"), ("Q  E", "Pages")];
+    let kw = 190.0;
+    let kx0 = size.x * 0.5 + 40.0;
+    for (i, (k, what)) in keys.iter().enumerate() {
+        let cap = Rect::new(kx0 + i as f32 * kw, y, 44.0, 22.0);
+        l.ui.p().rounded_border(cap, 3.0, 1.0, TEXT_DIM);
+        l.ui.text_in(k, cap, 11.0, Weight::Bold, TEXT_SOFT, Align::Center);
+        l.ui.text_in(what, Rect::new(cap.right() + 8.0, cap.y, kw - 60.0, cap.h), 13.0, Weight::Regular, TEXT_SOFT, Align::Left);
+    }
+    l.ui.text_in(crate::startup::VERSION, Rect::new(size.x - 260.0, y, 224.0, 22.0), 12.0, Weight::Regular, TEXT_DIM, Align::Right);
+
+    // --- Q / E: the page before / after (nothing typed; a key a page took is gone already)
+    if l.ui.focus.is_none() && !l.ui.popup_open() {
+        let step = match l.ui.input.raw_key {
+            Some(winit::keyboard::KeyCode::KeyQ) | Some(winit::keyboard::KeyCode::PageUp) => Some(n - 1),
+            Some(winit::keyboard::KeyCode::KeyE) | Some(winit::keyboard::KeyCode::PageDown) => Some(1),
+            _ => None,
+        };
+        if let Some(d) = step {
+            let i = super::PAGES.iter().position(|p| p.0 == l.page).unwrap_or(0);
+            l.go(super::PAGES[(i + d) % n].0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

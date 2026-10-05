@@ -978,6 +978,9 @@ impl Launcher {
                         "Enter" => Some(Key::Enter),
                         "Escape" => Some(Key::Escape),
                         "Backspace" => Some(Key::Backspace),
+                        "Up" => Some(Key::Up),
+                        "Down" => Some(Key::Down),
+                        "Tab" => Some(Key::Tab),
                         _ => None,
                     };
                     if let Some(k) = k {
@@ -989,6 +992,7 @@ impl Launcher {
                 "focus" => self.set_focus(arg.trim() != "0"),
                 "page" => {
                     if let Some((pg, _, _)) = PAGES.iter().find(|(_, n, _)| n.eq_ignore_ascii_case(arg.trim())) {
+                        self.title.open = false;
                         self.go(*pg);
                     }
                 }
@@ -1059,10 +1063,13 @@ impl Launcher {
         } else if self.title.open {
             title::draw(self);
         } else {
-        if title::enabled() {
+        // the game's menu (one full screen window): the page as a screen of it, no rail
+        let game = title::enabled();
+        if game {
             title::back_from_page(self);
+            title::page_background(self);
         }
-        let rail_w = RAIL_W;
+        let rail_w = if game { 0.0 } else { RAIL_W };
         self.page_anim = (self.page_anim + self.ui.dt / 0.15).min(1.0);
         // (no wider than a page reads well: on a wide screen the rest is margin, the page
         // in the middle - the panels stretched across 2000 px with their text at one end)
@@ -1074,7 +1081,7 @@ impl Launcher {
         let h = if mobile { seen.max(mobile::PAGE_H) } else { seen };
         self.page_max = (h - seen).max(0.0);
         self.page_scroll = self.page_scroll.clamp(0.0, self.page_max);
-        let content = Rect::new(rail_w + margin * 0.5 + (avail - w) * 0.5, top - self.page_scroll, w, h);
+        let content = if game { title::page_content(size.x, size.y) } else { Rect::new(rail_w + margin * 0.5 + (avail - w) * 0.5, top - self.page_scroll, w, h) };
         let e = 1.0 - (1.0 - self.page_anim).powi(3);
         let content = Rect::new(content.x + 8.0 * (1.0 - e), content.y, content.w, content.h);
         match self.page {
@@ -1089,9 +1096,14 @@ impl Launcher {
             Page::Timetable => timetable::draw(self, content),
             Page::Setup => pages::setup(self, content),
         }
-        // the rail over the page (a scrolled page passes under it)
-        self.rail();
-        self.status_bar();
+        // the rail over the page (a scrolled page passes under it); the game's menu has
+        // its header and keys instead
+        if game {
+            title::page_chrome(self);
+        } else {
+            self.rail();
+            self.status_bar();
+        }
         }
         self.draw_updated_notice();
         if let Some(i) = saved {
@@ -1346,6 +1358,14 @@ impl Launcher {
 
     /// A page's title and what it is for.
     pub fn page_title(&mut self, r: Rect, title: &str, sub: &str) -> Rect {
+        // (the game's menu says the page's name in its header: here only what it is for,
+        // in the room the name took)
+        if title::enabled() {
+            if !sub.is_empty() {
+                self.ui.text_in(sub, Rect::new(r.x, r.y + 2.0, r.w, 20.0), 13.0, Weight::Regular, TEXT_SOFT, Align::Left);
+            }
+            return Rect::new(r.x, r.y + 32.0, r.w, (r.h - 32.0).max(0.0));
+        }
         self.ui.text(title, Vec2::new(r.x, r.y + 22.0), 22.0, Weight::Bold, TEXT, Align::Left);
         if !sub.is_empty() {
             // (a narrow window: the line stops short of the tabs some pages put top right,
