@@ -1507,8 +1507,10 @@ impl Ui {
             } else {
                 mix(SOFT, WHITE, glow)
             };
+            // (translated before the arrow is added: "Vehicle options  ›" is in no language)
             let (text, more) = strip_more(label);
-            let shown = if more { format!("{text}  ›") } else { text.to_string() };
+            let text = omsi_ui::tr(text);
+            let shown = if more { format!("{text}  ›") } else { text.into_owned() };
             let l = self.text.label(r, scene, &shown, if lit { px | BOLD } else { px }, ink);
             let cy = (rect[1] + rect[3]) * 0.5;
             let lx = ((rect[0] + rect[2]) * 0.5 - l.w as f32 * 0.5).round();
