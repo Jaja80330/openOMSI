@@ -2655,6 +2655,9 @@ mod settings_tests {
         if !cfg!(target_os = "macos") {
             graphics.push("s-api");
         }
+        if cfg!(windows) {
+            graphics.push("set-single_window");
+        }
         let driving = vec![
             "s-keys", "set-steering_linear", "set-old_steering", "set-red_steer_spd", "s-mouse", "set-mouse_smooth", "set-mouse_right_off", "set-blinker_cancel", "set-brake_hold", "set-auto_clutch", "set-momentary_gears", "s-go-keys",
             "s-wrange", "s-wlock", "s-pedt", "s-pedb", "set-ff_enabled", "set-ff_invert", "s-ffroad", "s-ffeng", "s-fffade", "s-wreset", "s-go-pads",
