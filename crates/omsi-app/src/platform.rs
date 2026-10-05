@@ -15,10 +15,10 @@ static LEAVE: AtomicBool = AtomicBool::new(false);
 
 /// A computer whose launcher is the game's menu in one window (see `shell.rs`): a session
 /// that ends goes back to it, as on a phone.
-static SINGLE_WINDOW: AtomicBool = AtomicBool::new(false);
+static BIG_PICTURE: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn set_single_window() {
-    SINGLE_WINDOW.store(true, Ordering::Relaxed);
+pub(crate) fn set_big_picture() {
+    BIG_PICTURE.store(true, Ordering::Relaxed);
 }
 
 /// No "not responding" ghost over the window (Windows draws one, and offers to close the
@@ -33,8 +33,8 @@ pub(crate) fn no_ghosting() {
 }
 
 /// The launcher is the game's menu in this window (a session ends back in it).
-pub(crate) fn single_window() -> bool {
-    SINGLE_WINDOW.load(Ordering::Relaxed)
+pub(crate) fn big_picture() -> bool {
+    BIG_PICTURE.load(Ordering::Relaxed)
 }
 
 /// In the one window: the game menu's "Quit openOMSI" - the session ends, then the program.
@@ -50,9 +50,9 @@ pub(crate) fn take_quit_all() -> bool {
 }
 
 /// End the session: the program on a computer, back to the launcher on a phone (and in the
-/// one window of `single_window`).
+/// one window of `big_picture`).
 pub(crate) fn exit(event_loop: &ActiveEventLoop) {
-    if MOBILE || SINGLE_WINDOW.load(Ordering::Relaxed) {
+    if MOBILE || BIG_PICTURE.load(Ordering::Relaxed) {
         LEAVE.store(true, Ordering::Relaxed);
     } else {
         event_loop.exit();

@@ -1438,7 +1438,7 @@ impl Ui {
         x0
     }
 
-    /// The game menu as a game's pause screen (the one full screen window, see `shell.rs`):
+    /// The game menu as a game's pause screen (Big Picture, see `shell.rs`):
     /// the picture darkened, the game's name and "Paused" large, the lines in a column in the
     /// middle - the lit one framed - and the keys along the bottom, as the main menu has them.
     /// The lines' rects go to `menu_rects` as the card's do: the mouse and the keys work alike.
@@ -1567,9 +1567,9 @@ impl Ui {
         }
         let s = menu_scale(f);
         let kind = f.menu_kind;
-        // the one full screen window: the game menu itself as the pause screen of a game,
+        // Big Picture: the game menu itself as the pause screen of a game,
         // the same look as the main menu (its lists keep their card)
-        if kind == MenuKind::Game && f.menu_head.is_none() && !f.vr && crate::platform::single_window() {
+        if kind == MenuKind::Game && f.menu_head.is_none() && !f.vr && crate::platform::big_picture() {
             self.draw_pause(r, scene, f, sel, items, s);
             self.menu_overlay_range = overlay_start..scene.overlays.len();
             return;

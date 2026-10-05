@@ -1,5 +1,5 @@
-//! One window for the launcher and the game on a computer (Settings → Display → "One full
-//! screen window", Windows): the launcher, full screen, is the game's menu; a duty starts in
+//! Big Picture: one window for the launcher and the game on a computer (Settings → Graphics
+//! → "Big Picture", Windows): the launcher, full screen, is the game's menu; a duty starts in
 //! the same window and the same process, and ending it (the game menu's Quit, Escape) comes
 //! back to the menu instead of ending the program - what a phone does (see `android.rs`).
 //! Closing the window (Alt+F4) still ends the program, from the menu or from a drive.
@@ -17,7 +17,7 @@ pub(crate) fn wanted() -> bool {
     if !(args.is_empty() || args.iter().all(|a| a == "--launcher")) {
         return false;
     }
-    if let Some(v) = omsi_cfg::env::var_os("OMSI_SINGLE_WINDOW") {
+    if let Some(v) = omsi_cfg::env::var_os("OMSI_BIG_PICTURE") {
         return v != "0";
     }
     std::fs::read_to_string(omsi_launcher_lib::data_dir().join("settings.cfg"))
@@ -25,11 +25,11 @@ pub(crate) fn wanted() -> bool {
         .unwrap_or(false)
 }
 
-/// `single_window=1` in a settings file (the last line of it wins, as in the game).
+/// `big_picture=1` in a settings file (the last line of it wins, as in the game).
 fn setting_on(text: &str) -> bool {
     text.lines()
         .filter_map(|l| l.trim().split_once('='))
-        .filter(|(k, _)| k.trim().eq_ignore_ascii_case("single_window"))
+        .filter(|(k, _)| k.trim().eq_ignore_ascii_case("big_picture"))
         .last()
         .map(|(_, v)| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
         .unwrap_or(false)
@@ -59,7 +59,7 @@ struct Shell {
 
 /// Run the launcher as the game's menu until the window is closed.
 pub(crate) fn run(instance: wgpu::Instance) -> Result<()> {
-    crate::platform::set_single_window();
+    crate::platform::set_big_picture();
     omsi_launcher_lib::set_in_process_games(true);
     // (the window shows a loading screen while a drive is made or written: Windows' "not
     // responding" ghost over it, and its offer to close the program, would only be wrong)
@@ -224,10 +224,10 @@ impl ApplicationHandler for Shell {
 mod tests {
     #[test]
     fn the_setting_is_read_as_the_game_reads_its_settings() {
-        assert!(super::setting_on("msaa=4\nsingle_window=1\n"));
-        assert!(super::setting_on("single_window = true"));
+        assert!(super::setting_on("msaa=4\nbig_picture=1\n"));
+        assert!(super::setting_on("big_picture = true"));
         assert!(!super::setting_on("msaa=4\n"));
         // the last line wins
-        assert!(!super::setting_on("single_window=1\nsingle_window=0\n"));
+        assert!(!super::setting_on("big_picture=1\nbig_picture=0\n"));
     }
 }

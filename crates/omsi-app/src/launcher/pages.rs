@@ -591,7 +591,7 @@ fn graphics_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, cols: [Rect; 2]) ->
     // (the launcher as the game's menu, the drives in the same full screen window: from the
     // next start of openOMSI, see `shell.rs`)
     if cfg!(windows) {
-        toggle_setting(ui, s, dirty, c.row(), "One full screen window (menu and game, from the next start)", "single_window");
+        toggle_setting(ui, s, dirty, c.row(), "Big Picture: the menu and the game in one full screen window (from the next start)", "big_picture");
     }
     // (the window's own size in pixels; a Steam Deck's Gaming Mode and other odd screens,
     // #904 - "Automatic" fits the screen, and fills it under gamescope)
@@ -2656,7 +2656,7 @@ mod settings_tests {
             graphics.push("s-api");
         }
         if cfg!(windows) {
-            graphics.push("set-single_window");
+            graphics.push("set-big_picture");
         }
         let driving = vec![
             "s-keys", "set-steering_linear", "set-old_steering", "set-red_steer_spd", "s-mouse", "set-mouse_smooth", "set-mouse_right_off", "set-blinker_cancel", "set-brake_hold", "set-auto_clutch", "set-momentary_gears", "s-go-keys",

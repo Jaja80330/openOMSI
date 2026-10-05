@@ -538,7 +538,7 @@ impl App {
         if self.args.bus.is_some() || self.args.cam.is_some() || self.args.no_menu {
             // (the one window: its first picture is the loading screen, which stays while the
             // world is read - not a black or a stale one)
-            if crate::platform::single_window() {
+            if crate::platform::big_picture() {
                 self.still_frame(&omsi_ui::tr("Loading"));
             }
             self.load_world_now(event_loop);
