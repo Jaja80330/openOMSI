@@ -2904,6 +2904,13 @@ impl App {
                 self.finish_session();
                 crate::platform::exit(event_loop);
             }
+            // (the one full screen window: "quit" goes back to its menu, this ends the program)
+            "quitall" => {
+                self.game_menu = None;
+                self.finish_session();
+                crate::platform::request_quit_all();
+                crate::platform::exit(event_loop);
+            }
             // (the rest are the lines of the vehicle and world pages)
             other => {
                 self.page_action(other);
@@ -4487,6 +4494,14 @@ impl crate::App {
         if host || self.is_admin {
             let before_quit = v.iter().position(|x| x.0 == "quit").unwrap_or(v.len()).max(at);
             v.insert(before_quit, ("admin", "Administration..."));
+        }
+        // the one full screen window: the session ends back in the game's main menu, and the
+        // program can be left from here as well
+        if crate::platform::single_window() {
+            if let Some(q) = v.iter().position(|x| x.0 == "quit") {
+                v[q].1 = "Main menu";
+                v.insert(q + 1, ("quitall", "Quit openOMSI"));
+            }
         }
         v
     }

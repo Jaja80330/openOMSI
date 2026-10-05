@@ -80,6 +80,10 @@ impl Shell {
             if !crate::platform::take_leave() {
                 return;
             }
+            // (the game menu's "Quit openOMSI": not back to the menu, the program ends)
+            if crate::platform::take_quit_all() {
+                self.quit = true;
+            }
             let mut game = self.game.take().unwrap();
             game.exiting(event_loop);
             let window = game.window.take();

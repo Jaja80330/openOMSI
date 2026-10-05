@@ -21,6 +21,23 @@ pub(crate) fn set_single_window() {
     SINGLE_WINDOW.store(true, Ordering::Relaxed);
 }
 
+/// The launcher is the game's menu in this window (a session ends back in it).
+pub(crate) fn single_window() -> bool {
+    SINGLE_WINDOW.load(Ordering::Relaxed)
+}
+
+/// In the one window: the game menu's "Quit openOMSI" - the session ends, then the program.
+static QUIT_ALL: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn request_quit_all() {
+    QUIT_ALL.store(true, Ordering::Relaxed);
+}
+
+#[allow(dead_code)]
+pub(crate) fn take_quit_all() -> bool {
+    QUIT_ALL.swap(false, Ordering::Relaxed)
+}
+
 /// End the session: the program on a computer, back to the launcher on a phone (and in the
 /// one window of `single_window`).
 pub(crate) fn exit(event_loop: &ActiveEventLoop) {
