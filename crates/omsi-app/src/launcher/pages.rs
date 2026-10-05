@@ -588,6 +588,11 @@ fn graphics_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, cols: [Rect; 2]) ->
     let left = c.used();
     let mut c = Col::new(ui, cols[1], "Display");
     toggle_setting(ui, s, dirty, c.row(), "Fullscreen", "fullscreen");
+    // (the launcher as the game's menu, the drives in the same full screen window: from the
+    // next start of openOMSI, see `shell.rs`)
+    if cfg!(windows) {
+        toggle_setting(ui, s, dirty, c.row(), "One full screen window (menu and game, from the next start)", "single_window");
+    }
     // (the window's own size in pixels; a Steam Deck's Gaming Mode and other odd screens,
     // #904 - "Automatic" fits the screen, and fills it under gamescope)
     sel_setting(ui, s, dirty, "s-res", c.row(), "Window size", "resolution", RESOLUTIONS);
@@ -2446,7 +2451,7 @@ pub fn setup(l: &mut Launcher, area: Rect) {
         }
     }
     y += ROW + 10.0;
-    if core::IN_PROCESS_GAMES {
+    if core::in_process_games() {
         // (a phone: the game is this app itself)
         y += l.ui.paragraph("Copy the whole OMSI 2 folder (with maps and Vehicles in it) onto the phone - by cable, from a PC or a USB stick - for example as openOMSI/OMSI 2 in the internal storage, then choose it here with Browse. Mods go into openOMSI/Mods or are installed from the Mods page.", Vec2::new(inner.x, y), inner.w, 12.5, Weight::Regular, TEXT_DIM);
     } else {
