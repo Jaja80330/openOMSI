@@ -4,6 +4,7 @@
 //! hiss under the voice, the squelch opening with a click and closing with its "kssh".
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::OnceLock;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -218,11 +219,29 @@ pub struct Mic {
 /// At most this much (s) waits in the microphone's buffer (an older part is dropped).
 const MIC_KEEP: f32 = 1.0;
 
+/// Input device names offered by the sound settings page.
+pub fn input_devices() -> &'static [String] {
+    static DEVICES: OnceLock<Vec<String>> = OnceLock::new();
+    DEVICES.get_or_init(|| {
+        cpal::default_host()
+            .input_devices()
+            .map(|devices| devices.filter_map(|device| device.name().ok()).collect())
+            .unwrap_or_default()
+    })
+}
+
 impl Mic {
-    /// The system's default microphone, its sound at `rate` (Hz).
-    pub fn open(rate: u32) -> Result<Mic, String> {
+    /// The selected microphone (empty name: system default), its sound at `rate` (Hz).
+    pub fn open(rate: u32, selected: &str) -> Result<Mic, String> {
         let host = cpal::default_host();
-        let dev = host.default_input_device().ok_or("no microphone")?;
+        let dev = if selected.is_empty() {
+            host.default_input_device().ok_or("no microphone")?
+        } else {
+            host.input_devices()
+                .map_err(|e| e.to_string())?
+                .find(|device| device.name().ok().as_deref() == Some(selected))
+                .ok_or_else(|| format!("microphone \"{selected}\" is not available"))?
+        };
         let name = dev.name().unwrap_or_default();
         let cfg = dev.default_input_config().map_err(|e| e.to_string())?;
         let channels = cfg.channels().max(1) as usize;

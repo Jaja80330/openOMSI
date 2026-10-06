@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.22 - 2026-10-06
+
+### Features & Improvements
+- The Sound settings let you choose the microphone used for individual SAE dispatch calls, or keep using the system default.
+
 Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/openOMSI-Project/openOMSI/releases) page.

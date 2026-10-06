@@ -9,6 +9,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Optional release version (for example 0.2.22)
+        required: false
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -36,7 +41,14 @@ jobs:
       - id: v
         env:
           PR: ${{ github.event.pull_request.number }}
-        run: echo "version=$(sh scripts/version.sh)${PR:+-pr$PR}" >> "$GITHUB_OUTPUT"
+          VERSION_OVERRIDE: ${{ github.event.inputs.version }}
+        run: |
+          version="${VERSION_OVERRIDE:-$(sh scripts/version.sh)${PR:+-pr$PR}}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'; then
+            echo "Invalid release version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - run: echo "### openOMSI ${{ steps.v.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
 
   windows:

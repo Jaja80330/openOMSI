@@ -696,7 +696,7 @@ impl App {
         if let Some(p) = self.player.as_mut() {
             radio.bus_link(&mut p.vehicle, lan);
         }
-        radio.tick(lan, self.audio.as_ref(), 1.0);
+        radio.tick(lan, self.audio.as_ref(), 1.0, &self.settings.phonie_microphone);
     }
 
     /// A command another player's game sent ours (`LanSession::command`).

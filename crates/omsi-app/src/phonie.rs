@@ -628,7 +628,7 @@ impl Radio {
     }
 
     /// Once a frame: the voices that came, ours sent while the key is down.
-    pub(crate) fn tick(&mut self, lan: &mut LanSession, audio: Option<&omsi_audio::AudioEngine>, gain: f32) {
+    pub(crate) fn tick(&mut self, lan: &mut LanSession, audio: Option<&omsi_audio::AudioEngine>, gain: f32, microphone: &str) {
         if self.heard.is_some() && !self.available() {
             // the server went quiet: no call, no request
             self.call = None;
@@ -670,7 +670,7 @@ impl Radio {
         // the microphone: open while an individual call lasts
         let may_talk = self.call == Some(CallKind::Individual);
         if may_talk && self.mic.is_none() && self.mic_error.is_none() {
-            match omsi_audio::twoway::Mic::open(dispatch::RATE) {
+            match omsi_audio::twoway::Mic::open(dispatch::RATE, microphone) {
                 Ok(m) => {
                     log::info!("radio: microphone {}", m.name);
                     self.mic = Some(m);

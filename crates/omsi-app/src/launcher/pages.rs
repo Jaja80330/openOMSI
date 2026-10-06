@@ -937,6 +937,13 @@ fn sound_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, cols: [Rect; 2]) -> [f
     }
     toggle_setting(ui, s, dirty, c.row(), "Doppler effect", "doppler");
     sel_setting(ui, s, dirty, "s-voices", c.row(), "Passenger voices", "pax_voices", &[("all", "Greetings and tickets"), ("tickets", "Only the ticket asked for"), ("off", "Silent")]);
+    c.section(ui, "SAE dispatch radio");
+    let devices = omsi_audio::twoway::input_devices();
+    let mut options: Vec<(String, String)> = vec![(String::new(), "System default".into())];
+    options.extend(devices.iter().cloned().map(|name| (name.clone(), name)));
+    let options: Vec<(&str, &str)> = options.iter().map(|(value, label)| (value.as_str(), label.as_str())).collect();
+    sel_setting(ui, s, dirty, "s-phonie-mic", c.row(), "Microphone", "phonie_microphone", &options);
+    c.y += ui.paragraph("Used for your voice during individual dispatch calls.", Vec2::new(c.inner.x, c.y), c.inner.w, 12.0, Weight::Regular, TEXT_DIM) + 8.0;
     [c.used(), radio_stations(ui, cols[1])]
 }
 
@@ -2709,7 +2716,7 @@ mod settings_tests {
             camera.extend(["set-vr", "s-vr-scale", "s-vr-head-smoothing", "s-vr-mirror-rate", "set-vr_desktop_mirror", "s-go-vr-keys"]);
         }
         // (the radio stations: one, see `frame`)
-        let sound = vec!["s-vol", "s-volai", "s-volsc", "set-doppler", "s-voices", "radio-name-0", "radio-url-0", "radio-del-0", "radio-add"];
+        let sound = vec!["s-vol", "s-volai", "s-volsc", "set-doppler", "s-voices", "s-phonie-mic", "radio-name-0", "radio-url-0", "radio-del-0", "radio-add"];
         let gameplay = vec![
             "s-board", "set-exact_fare", "s-pax", "set-get_up", "s-unsched", "s-maxsched", "s-maxpark",
             "s-maint", "set-collision_vehicles", "set-collision_objects", "set-collision_pedestrians", "set-use_real_time", "set-use_real_date", "set-time_sync", "set-metar_sync", "s-timespeed",
