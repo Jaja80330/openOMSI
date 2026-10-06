@@ -91,6 +91,7 @@ mod duty_start;
 mod input_script;
 mod launcher_link;
 mod lan_mods;
+mod server_ttdata;
 mod memory;
 mod offscreen;
 mod ground_gap;
@@ -226,8 +227,9 @@ pub fn run() -> Result<()> {
     });
     let mut app = app;
     let r = event_loop.run_app(&mut app);
-    // the host's mods of this session go with it
+    // the host's mods of this session go with it, and the server's timetable
     lan_mods::clean_up();
+    server_ttdata::clean_up();
     r?;
     Ok(())
 }
@@ -406,6 +408,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
     // the host's mods: served by the host, fetched by a joining player before its world is
     // made (see `lan_mods`)
     lan_mods::remove_stale();
+    server_ttdata::remove_stale();
     if let Some(l) = lan.as_mut() {
         lan::share_mods(&mut args, l);
         lan::take_host_map(&mut args, l);
@@ -449,6 +452,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         }
         let r = run_offscreen(&args, &out, lan, lan_game);
         lan_mods::clean_up();
+        server_ttdata::clean_up();
         return r.map(|_| None);
     }
     let view = args.view.clone();

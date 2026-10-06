@@ -1212,11 +1212,20 @@ pub fn share_mods(args: &mut Args, lan: &mut LanSession) {
                 lan.warnings.push(text);
                 write_status(lan, &Default::default(), None);
             };
-            note(lan, "Host's mods: looking what is needed…".into());
             let session = lan.session;
+            let joined_url = WS_PATH.lock().ok().and_then(|w| w.as_ref().and_then(|w| w.url.clone()));
+            // the server's timetable (a dedicated server serves its map's TTData): the
+            // players' duties and boards are then those of its AI buses
+            {
+                let bases = crate::server_ttdata::web_bases(joined_url.as_deref(), args.lan_join.as_deref(), host);
+                match crate::server_ttdata::fetch_any(&bases) {
+                    Ok(r) => log::info!("timetable: the server's timetable {} ({} files, {} fetched)", r.version, r.files, r.fetched),
+                    Err(e) => log::info!("timetable: playing with this game's own timetable ({e})"),
+                }
+            }
+            note(lan, "Host's mods: looking what is needed…".into());
             // the host's TCP port is not always reachable (a router forwards the UDP session
             // only, or we came in over a WebSocket): the files go through its tunnel then
-            let joined_url = WS_PATH.lock().ok().and_then(|w| w.as_ref().and_then(|w| w.url.clone()));
             let direct = joined_url.is_none() && std::net::TcpStream::connect_timeout(&host, Duration::from_secs(3)).is_ok();
             if !direct {
                 let base = joined_url.or_else(|| omsi_net::bridge::lookup_tunnel(session).and_then(|u| omsi_net::ws::ws_url(&u)));

@@ -147,7 +147,7 @@ pub fn players_json(players: &[PlayerInfo]) -> String {
 impl ServerInfo {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"name\":{},\"motd\":{},\"map\":{},\"players\":{},\"max_players\":{},\"version\":{},\"icon\":{},\"time\":{},\"weather\":{},\"password\":{},\"protocol\":{},\"vehicles\":{},\"login\":{},\"world\":{}}}",
+            "{{\"name\":{},\"motd\":{},\"map\":{},\"players\":{},\"max_players\":{},\"version\":{},\"icon\":{},\"time\":{},\"weather\":{},\"password\":{},\"protocol\":{},\"vehicles\":{},\"login\":{},\"ttdata\":{},\"world\":{}}}",
             json_str(&self.name),
             json_str(&self.motd),
             json_str(&self.map),
@@ -161,6 +161,7 @@ impl ServerInfo {
             crate::PROTOCOL,
             json_str(&self.vehicles.join(";")),
             json_str(&self.login),
+            json_str(&crate::ttdata::version()),
             self.world.map(|w| w.to_json()).unwrap_or_else(|| "null".into())
         )
     }
@@ -542,6 +543,7 @@ fn serve(stream: TcpStream, target: SocketAddr, info: &Mutex<ServerInfo>, stop: 
                     ("404 Not Found", "text/plain", b"this server does not share its players' positions".to_vec())
                 }
             }
+            p if p == "/ttdata" || p.starts_with("/ttdata/") => crate::ttdata::answer(p),
             "/icon.png" => {
                 let icon = info.lock().unwrap_or_else(|e| e.into_inner()).icon.clone();
                 if icon.is_empty() {

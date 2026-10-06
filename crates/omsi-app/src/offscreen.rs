@@ -59,6 +59,10 @@ pub(crate) fn run_offscreen(
     } else {
         None
     };
+    // a dedicated server: its timetable goes to the players who join
+    if crate::server::SERVER_METAR.get().is_some() {
+        crate::server_ttdata::publish(args);
+    }
     if let Some(s) = schedule.as_mut() {
         lan::answering_while(&mut lan_off, args.bus.as_deref(), || {
             s.precache(

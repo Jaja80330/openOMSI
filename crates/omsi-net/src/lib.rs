@@ -83,6 +83,7 @@ pub mod vars;
 pub mod ws;
 pub mod dispatch;
 pub mod login;
+pub mod ttdata;
 pub mod tunnel;
 pub mod official;
 
@@ -108,8 +109,9 @@ pub use wire::{
 pub const PROTOCOL: u32 = 6;
 /// What this game can do beyond the protocol, said in its `HELLO` (comma-separated): a
 /// server may let in only games that can (`LanSession::require`) - `radio`: the dispatch
-/// radio (`dispatch`). A host that knows nothing of it reads past it.
-pub const FEATURES: &str = "radio";
+/// radio (`dispatch`), `ttdata`: plays with the server's timetable (`ttdata`). A host that
+/// knows nothing of it reads past it.
+pub const FEATURES: &str = "radio,ttdata";
 /// (omsi-plugin's `MULTIPLAYER_PORTS` keeps `omsi.send` off this one and the `PORT_RANGE` after it.)
 pub const DEFAULT_PORT: u16 = 27015;
 /// Ports a host tries after the default one when that is taken (a second session on the

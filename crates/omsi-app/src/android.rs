@@ -104,6 +104,7 @@ fn android_main(app: AndroidApp) {
         log::error!("{e}");
     }
     lan_mods::clean_up();
+    crate::server_ttdata::clean_up();
     // (the activity ends with the program)
     std::process::exit(0);
 }
@@ -286,6 +287,7 @@ impl Shell {
             let window = game.window.take();
             drop(game);
             lan_mods::clean_up();
+            crate::server_ttdata::clean_up();
             log::info!("session ended: back to the launcher");
             let l = self.launcher();
             if let Some(w) = window {
