@@ -8461,7 +8461,8 @@ impl Renderer {
         scene.overlay_res.truncate(overlays.len());
         for (k, (tex, r)) in overlays.iter().copied().enumerate() {
             let r = snap_rect(r);
-            let ndc = [
+            let texture = scene.textures.get(tex);
+            let mut ndc = [
                 r[0] / full_w as f32 * 2.0 - 1.0,
                 1.0 - r[1] / full_h as f32 * 2.0,
                 r[2] / full_w as f32 * 2.0 - 1.0,
@@ -8471,6 +8472,13 @@ impl Renderer {
                 0.0,
                 0.0,
             ];
+            // A streamed texture can be recycled while a previous frame's overlay still
+            // refers to its old slot. Keep the overlay list aligned, but make that quad
+            // degenerate until the UI supplies a live texture again.
+            if texture.is_none() {
+                ndc[2] = ndc[0];
+                ndc[3] = ndc[1];
+            }
             if let Some((_, buf, _, last)) = scene.overlay_res.get_mut(k).filter(|o| o.0 == tex) {
                 if *last != ndc {
                     self.queue.write_buffer(buf, 0, bytemuck::cast_slice(&ndc));
@@ -8495,7 +8503,9 @@ impl Renderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&scene.textures[tex].view),
+                        resource: wgpu::BindingResource::TextureView(
+                            texture.map_or(&self.white_texture.view, |texture| &texture.view),
+                        ),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
