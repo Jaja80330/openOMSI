@@ -692,6 +692,10 @@ impl App {
             }
             return;
         };
+        // (the bus driven may have a terminal of its own: its scripts see the radio)
+        if let Some(p) = self.player.as_mut() {
+            radio.bus_link(&mut p.vehicle, lan);
+        }
         radio.tick(lan, self.audio.as_ref(), 1.0);
     }
 
