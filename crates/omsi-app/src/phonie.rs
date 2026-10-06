@@ -10,7 +10,8 @@
 //! * The dispatcher's calls: an individual call (the dispatcher and one bus, both talk),
 //!   a selective call (the dispatcher to the buses chosen) and a general call (to every
 //!   bus on the server); in the last two only the dispatcher talks. Only the dispatcher
-//!   starts and ends a call - a driver cannot hang up.
+//!   starts and ends a call - a driver cannot hang up. A call reaches the players who drive a
+//!   bus of their own: one on foot, or riding in another's bus, has no radio.
 //! * Push to talk: a key in the game (`radio_ptt`, the right Ctrl key unless moved), a key
 //!   on the dispatch page. The dispatcher's key wins: while the dispatcher talks, the
 //!   driver's voice is not passed on (and the driver's game sends none).
@@ -214,12 +215,16 @@ impl RadioServer {
         let names: std::collections::HashMap<u32, String> = lan.peers().map(|p| (p.pose.id, p.pose.name.clone())).collect();
         let mut here: Vec<u32> = names.keys().copied().collect();
         here.sort_unstable();
+        // who drives a bus of their own: a player on foot, or riding in another's bus, has no
+        // radio to be called on
+        let mut drivers: Vec<u32> = lan.peers().filter(|p| p.pose.walker.is_none() && p.pose.has_vehicle()).map(|p| p.pose.id).collect();
+        drivers.sort_unstable();
         let name = |id: u32| names.get(&id).cloned().unwrap_or_default();
         // players gone: their requests, their place in a call
         self.requests.retain(|r| here.contains(&r.player));
         if let Some(c) = self.call.as_mut() {
             match c.kind {
-                CallKind::General => c.members = here.clone(),
+                CallKind::General => c.members = drivers.clone(),
                 _ => c.members.retain(|m| here.contains(m)),
             }
             if c.members.is_empty() && c.kind != CallKind::General {
@@ -238,7 +243,7 @@ impl RadioServer {
                         self.dispatcher = None;
                     }
                 }
-                ConsoleIn::Text(id, text) => self.console_command(id, &text, &here),
+                ConsoleIn::Text(id, text) => self.console_command(id, &text, &drivers),
                 ConsoleIn::Voice(id, frame) => {
                     if Frame::from_bytes(&frame).is_none() {
                         continue;
@@ -300,7 +305,7 @@ impl RadioServer {
             "call": self.call.as_ref().map(|c| json!({"kind": c.kind.word(), "players": c.members, "since": c.since})),
             "talk": talk.word(),
             "driver": self.driver.filter(|_| talk == Talk::Driver).map(|(d, _)| d),
-            "players": here.iter().map(|&id| json!({"id": id, "name": name(id)})).collect::<Vec<_>>(),
+            "players": here.iter().map(|&id| json!({"id": id, "name": name(id), "bus": drivers.contains(&id)})).collect::<Vec<_>>(),
         })
         .to_string();
         if self.console_refresh <= 0.0 || state != self.console_state {
@@ -311,7 +316,8 @@ impl RadioServer {
     }
 
     /// A console's message: `{"t": "call" | "end" | "take" | "drop" | "ptt", …}`.
-    fn console_command(&mut self, console: u64, text: &str, here: &[u32]) {
+    /// (`drivers`: the players a call can reach, those driving a bus of their own)
+    fn console_command(&mut self, console: u64, text: &str, drivers: &[u32]) {
         let Ok(v) = serde_json::from_str::<Value>(text) else {
             return;
         };
@@ -323,8 +329,8 @@ impl RadioServer {
                 };
                 let asked: Vec<u32> = v.get("players").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|p| p as u32).collect()).unwrap_or_default();
                 let members: Vec<u32> = match kind {
-                    CallKind::General => here.to_vec(),
-                    _ => asked.into_iter().filter(|p| here.contains(p)).collect(),
+                    CallKind::General => drivers.to_vec(),
+                    _ => asked.into_iter().filter(|p| drivers.contains(p)).collect(),
                 };
                 if members.is_empty() && kind != CallKind::General {
                     return;
@@ -742,11 +748,21 @@ mod tests {
         assert!(r.can_request());
     }
 
+    /// The consoles' hub is the process's: the tests that use it take turns (each would take
+    /// the other's messages).
+    fn hub_test() -> std::sync::MutexGuard<'static, ()> {
+        static HUB_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let guard = HUB_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = dispatch::take_console_input();
+        guard
+    }
+
     /// A server with its radio, a driver's game and a dispatcher's console, all on the
     /// loopback: the request, taken, the call back, the voices both ways, the dispatcher's
     /// key over the driver's, the call's end.
     #[test]
     fn a_driver_asks_and_the_dispatcher_calls_back() {
+        let _hub = hub_test();
         use omsi_net::{Pose, WorldInfo};
         let world = || WorldInfo { map: "m".into(), date: "2026-10-05".into(), time: 36000.0, weather: String::new(), season: String::new() };
         let mut host = LanSession::host(27940, "Server", world(), true).unwrap();
@@ -754,7 +770,7 @@ mod tests {
         let mut driver = LanSession::join(&port.to_string(), "driver", world(), Duration::from_secs(1)).unwrap();
         let mut radio = RadioServer::new();
         let (console, rx) = dispatch::register_console();
-        let pose = |x: f64| Pose { name: "p".into(), bus: "Vehicles/x.bus".into(), x, ..Default::default() };
+        let pose = |x: f64| Pose { name: "p".into(), bus: "Vehicles/x.bus".into(), flags: omsi_net::FLAG_VEHICLE, x, ..Default::default() };
         let mut told: Vec<String> = Vec::new();
         let mut to_console: Vec<ConsoleOut> = Vec::new();
         let run = |host: &mut LanSession, driver: &mut LanSession, radio: &mut RadioServer, rounds: usize, told: &mut Vec<String>, out: &mut Vec<ConsoleOut>| {
@@ -894,6 +910,59 @@ mod tests {
         r.on_command("state general - none on");
         r.bus_link(&mut bus, &mut lan);
         assert_eq!(bus.0["Phonie_Call"], 3.0);
+    }
+
+    /// A call reaches the players driving a bus of their own: one on foot is in no call.
+    #[test]
+    fn a_player_on_foot_is_not_called() {
+        let _hub = hub_test();
+        use omsi_net::{Pose, WorldInfo};
+        let world = || WorldInfo { map: "m".into(), date: "2026-10-06".into(), time: 36000.0, weather: String::new(), season: String::new() };
+        let mut host = LanSession::host(27970, "Server", world(), true).unwrap();
+        let port = host.local_addr().unwrap().port();
+        let mut driver = LanSession::join(&port.to_string(), "driver", world(), Duration::from_secs(1)).unwrap();
+        let mut walker = LanSession::join(&port.to_string(), "walker", world(), Duration::from_secs(1)).unwrap();
+        let bus = Pose { name: "driver".into(), bus: "Vehicles/x.bus".into(), flags: omsi_net::FLAG_VEHICLE, x: 50.0, ..Default::default() };
+        let afoot = Pose { name: "walker".into(), x: 80.0, ..Default::default() };
+        let mut radio = RadioServer::new();
+        let (console, rx) = dispatch::register_console();
+        let mut last = Value::Null;
+        let mut run = |host: &mut LanSession, driver: &mut LanSession, walker: &mut LanSession, radio: &mut RadioServer, rounds: usize| {
+            for _ in 0..rounds {
+                host.tick(0.05, &Pose::default());
+                driver.tick(0.05, &bus);
+                walker.tick(0.05, &afoot);
+                radio.tick(host, 0.05);
+                for m in rx.try_iter() {
+                    if let ConsoleOut::Text(t) = m {
+                        last = serde_json::from_str(&t).unwrap_or(Value::Null);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            last.clone()
+        };
+        let mut st = Value::Null;
+        for _ in 0..80 {
+            st = run(&mut host, &mut driver, &mut walker, &mut radio, 1);
+            if st["players"].as_array().is_some_and(|a| a.len() == 2) && st["players"][0]["bus"] != st["players"][1]["bus"] {
+                break;
+            }
+        }
+        let (d, w) = (driver.my_id, walker.my_id);
+        let bus_of = |st: &Value, id: u32| st["players"].as_array().unwrap().iter().find(|p| p["id"] == id).map(|p| p["bus"].clone());
+        assert_eq!(bus_of(&st, d), Some(json!(true)));
+        assert_eq!(bus_of(&st, w), Some(json!(false)));
+        // the general call: the driver alone
+        dispatch::console_said(ConsoleIn::Text(console, json!({"t": "call", "kind": "general"}).to_string()));
+        let st = run(&mut host, &mut driver, &mut walker, &mut radio, 6);
+        assert_eq!(st["call"]["players"], json!([d]));
+        // the walker called on its own: no call
+        dispatch::console_said(ConsoleIn::Text(console, json!({"t": "end"}).to_string()));
+        dispatch::console_said(ConsoleIn::Text(console, json!({"t": "call", "kind": "individual", "players": [w]}).to_string()));
+        let st = run(&mut host, &mut driver, &mut walker, &mut radio, 6);
+        assert!(st["call"].is_null(), "{st}");
+        dispatch::unregister_console(console);
     }
 
     #[test]
