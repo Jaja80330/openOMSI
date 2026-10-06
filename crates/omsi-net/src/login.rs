@@ -99,6 +99,10 @@ mod tests {
         assert_eq!(check(key, "", 0), Err(Refused::Missing));
         assert_eq!(check(key, "v1.x.y", 0), Err(Refused::Invalid));
         assert_eq!(key_of("00112233445566778899aabbccddeeff").map(|k| k.len()), Some(16));
+        // a token as the NEROSY Leitstelle signs it (Python's hmac): taken
+        let py = "v1.42.4a65616e20544c41.4000000000.86f45519de576f7af4e1c331cf2783d0b84cfb5c130b1fe4e4dd06725f177e81";
+        assert_eq!(check(key, py, 0).map(|l| l.name), Ok("Jean TLA".to_string()));
+        assert_eq!(issue(key, "42", "Jean TLA", 4_000_000_000), py);
         assert!(key_of("short").is_none());
     }
 }
