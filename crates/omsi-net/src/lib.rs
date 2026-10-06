@@ -82,6 +82,7 @@ pub mod world;
 pub mod vars;
 pub mod ws;
 pub mod dispatch;
+pub mod login;
 pub mod tunnel;
 pub mod official;
 
@@ -1442,6 +1443,15 @@ pub struct LanSession {
     /// The features a joining game must have (`FEATURES`), and what one without them is told.
     required: Vec<String>,
     required_message: String,
+    /// Host: the key of the login a joining game's token must be signed with (`login`), and
+    /// what one without a valid token is told. Client: the token it sends.
+    login_key: Option<Vec<u8>>,
+    login_message: String,
+    join_token: String,
+    /// Host: who logged in as whom (player id -> account), for the server's log and bans,
+    /// and the name each is called by (the login's, whatever its game says).
+    pub logins: HashMap<u32, String>,
+    login_names: HashMap<u32, String>,
     /// Commands for this game (`command`): (from, text).
     commands: Vec<(u32, String)>,
     /// The dispatch radio's frames that came: (who speaks, frame) - a host's from its
@@ -1538,6 +1548,11 @@ impl LanSession {
             banned: Vec::new(),
             required: Vec::new(),
             required_message: String::new(),
+            login_key: None,
+            login_message: String::new(),
+            join_token: String::new(),
+            logins: HashMap::new(),
+            login_names: HashMap::new(),
             commands: Vec::new(),
             radio_in: Vec::new(),
             clock_speed: 1.0,
@@ -1846,6 +1861,19 @@ impl LanSession {
                 }
             }
         }
+    }
+
+    /// Host: let in only games with a token of this login (`login`), and call the player by
+    /// the name in it; one without a valid token is told `message`.
+    pub fn require_login(&mut self, key: Vec<u8>, message: String) {
+        log::info!("LAN: only players logged in get in");
+        self.login_key = Some(key);
+        self.login_message = message;
+    }
+
+    /// Client: the token of the server's login, sent with the hello (`login`).
+    pub fn set_join_token(&mut self, token: &str) {
+        self.join_token = token.trim().to_string();
     }
 
     /// Host: let in only games that have these features (`FEATURES`); one without them is
@@ -2209,11 +2237,12 @@ impl LanSession {
             "-".to_string()
         };
         let msg = format!(
-            "HELLO|{PROTOCOL}|{session}|{}|{}|{}|{:016X}|{FEATURES}",
+            "HELLO|{PROTOCOL}|{session}|{}|{}|{}|{:016X}|{FEATURES}|{}",
             self.my_name,
             vehicle_path(&mine.bus).unwrap_or_default(),
             self.world.fields(),
-            self.nonce
+            self.nonce,
+            clean_text(&self.join_token, 600)
         );
         for h in to {
             self.send(msg.as_bytes(), h);
@@ -2928,6 +2957,8 @@ impl LanSession {
             return;
         }
         let host = self.role == Role::Host;
+        // (a player logged in is called by the login's name, whatever its game says)
+        let forced = if host { self.login_names.get(&id).cloned() } else { None };
         let relay;
         {
             let peer = match self.role {
@@ -2948,6 +2979,9 @@ impl LanSession {
             // a player keeps the name it joined with unless it sends one
             if info.name.is_empty() {
                 info.name = peer.pose.name.clone();
+            }
+            if let Some(n) = forced {
+                info.name = n;
             }
             let changed =
                 !peer.has_info || peer.pose.bus != info.bus || peer.pose.name != info.name;
@@ -3057,10 +3091,30 @@ impl LanSession {
 
     fn on_hello(&mut self, parts: &[&str], from: SocketAddr) {
         let proto = field(parts, 1).parse::<u32>().unwrap_or(1);
-        let name = match clean_text(field(parts, 3), MAX_NAME) {
+        let mut name = match clean_text(field(parts, 3), MAX_NAME) {
             n if n.is_empty() => "Driver".to_string(),
             n => n,
         };
+        // a server with a login of its own: a token it signed, and the name in it
+        let mut account = None;
+        if let Some(key) = self.login_key.clone() {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            match login::check(&key, field(parts, 12), now) {
+                Ok(l) => {
+                    let n = clean_text(&l.name, MAX_NAME);
+                    if !n.is_empty() {
+                        name = n;
+                    }
+                    account = Some(l.account);
+                }
+                Err(why) => {
+                    log::warn!("LAN: '{name}' at {from} has no valid login ({why:?}); turned away");
+                    let message = if self.login_message.is_empty() { "this server needs you to log in first (its launcher login)".to_string() } else { self.login_message.clone() };
+                    self.reject(from, &message);
+                    return;
+                }
+            }
+        }
         if proto != PROTOCOL {
             log::warn!("LAN: {from} speaks protocol {proto}, we speak {PROTOCOL}; turned away");
             self.reject(from, &format!("the host runs LAN protocol {PROTOCOL}, your game protocol {proto} - both players need the same version of the game"));
@@ -3195,6 +3249,15 @@ impl LanSession {
         };
         if let Some(p) = self.peers.get_mut(&id) {
             p.last_seen = Instant::now();
+        }
+        if let Some(a) = account {
+            self.login_names.insert(id, name.clone());
+            if let Some(p) = self.peers.get_mut(&id) {
+                p.pose.name = name.clone();
+            }
+            if self.logins.insert(id, a.clone()).as_deref() != Some(a.as_str()) {
+                log::info!("LAN: player {id} '{name}' logged in as {a}");
+            }
         }
         self.send_welcome(id, from);
         if let Some(here) = here {

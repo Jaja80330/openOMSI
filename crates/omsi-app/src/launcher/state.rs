@@ -32,6 +32,10 @@ pub enum Msg {
     Installed(Result<core::install::Progress, String>),
     Join(serde_json::Value),
     Server { address: String, info: Result<omsi_net::ws::ServerInfo, String> },
+    /// The server's login: its page is open in the browser (its address), the player logged
+    /// in (the token kept), or it did not work out (why).
+    LoginOpened(String),
+    LoginDone(Result<core::logins::Saved, String>),
     /// A background job stopped on an error of its own (a panic): whatever it was loading
     /// is not coming.
     Crashed(String),
@@ -233,6 +237,8 @@ pub struct State {
     /// A game started from here was sent away by its server (kicked, banned) or turned away
     /// at the door: the server's message, for the "Disconnected from the server" dialog.
     pub disconnected: Option<String>,
+    /// A server's own login under way before its game starts (see `omsi_net::login`).
+    pub login: Option<LoginFlow>,
     pub jobs: Vec<core::install::Progress>,
     pub mods: Option<core::ModsStatus>,
     pub mods_asked: bool,
@@ -304,6 +310,7 @@ impl State {
             launched_pid: None,
             crash: None,
             disconnected: None,
+            login: None,
             jobs: Vec::new(),
             mods: None,
             mods_asked: false,
@@ -609,8 +616,43 @@ impl State {
             return;
         }
         let d = self.duty();
+        // a server with a login of its own: the player logs in first (in the browser), the
+        // game starts once it is done
+        if self.choice.lan_mode == "join" {
+            let target = self.choice.lan_addr.trim().to_string();
+            let key = self.joined_server.clone().unwrap_or_else(|| target.clone());
+            let login = self.server_info.get(&key).and_then(|x| x.1.as_ref().ok()).map(|i| i.login.trim().to_string()).filter(|l| !l.is_empty());
+            if let Some(login) = login {
+                if core::logins::saved(&target).is_none() {
+                    self.begin_login(login, target, d);
+                    return;
+                }
+            }
+        }
         self.set_status("Starting the game…", false);
         self.queued_launch = Some(d);
+    }
+
+    /// Log in at the server's login (`login`, its address) for `target`, then start `d`.
+    fn begin_login(&mut self, login: String, target: String, d: core::Duty) {
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.login = Some(LoginFlow { target, duty: d, url: None, error: None, cancel: cancel.clone() });
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let r = login_flow(&login, &cancel, |url| {
+                let _ = tx.send(Msg::LoginOpened(url.to_string()));
+            });
+            if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = tx.send(Msg::LoginDone(r));
+            }
+        });
+    }
+
+    /// Stop waiting for the login (the dialog's Cancel).
+    pub fn cancel_login(&mut self) {
+        if let Some(l) = self.login.take() {
+            l.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// The duty as the backend takes it.
@@ -813,6 +855,24 @@ impl State {
                 self.loading_lines = false;
                 self.set_status(format!("Reading the content stopped on an error: {why}"), true);
             }
+            Msg::LoginOpened(url) => {
+                if let Some(l) = self.login.as_mut() {
+                    l.url = Some(url);
+                }
+            }
+            Msg::LoginDone(r) => match (r, self.login.take()) {
+                (Ok(saved), Some(l)) => {
+                    log::info!("launcher: logged in to {} as {}", l.target, saved.name);
+                    core::logins::save(&l.target, saved.clone());
+                    self.set_status(format!("Logged in as {}: starting the game…", saved.name), false);
+                    self.queued_launch = Some(l.duty);
+                }
+                (Err(e), Some(mut l)) => {
+                    l.error = Some(e);
+                    self.login = Some(l);
+                }
+                _ => {}
+            },
             Msg::Server { address, info } => {
                 // the host of the code typed in: its map is the one the duty is chosen on
                 // (installed here: the line, tour and entry point of another map go)
@@ -1447,4 +1507,50 @@ mod crash_tests {
 
 fn read_settings_file() -> Option<String> {
     std::fs::read_to_string(core::data_dir().join("settings.cfg")).ok()
+}
+
+/// A server's own login under way (`State::login`).
+pub struct LoginFlow {
+    /// The server joined, and the duty that starts once logged in.
+    pub target: String,
+    pub duty: core::Duty,
+    /// The login's page, once it is open in the browser.
+    pub url: Option<String>,
+    /// Why it did not work out.
+    pub error: Option<String>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The login's steps: ask it for a login (`POST <login>`: an id, the page to open, where to
+/// ask how it goes), open the page in the browser, then ask every two seconds until the
+/// player is logged in (ten minutes at the most).
+fn login_flow(login: &str, cancel: &std::sync::atomic::AtomicBool, opened: impl Fn(&str)) -> Result<core::logins::Saved, String> {
+    use std::sync::atomic::Ordering;
+    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(15)).build();
+    let start: serde_json::Value = agent.post(login).send_string("").map_err(|e| format!("the server's login did not answer: {e}"))?.into_string().ok().and_then(|t| serde_json::from_str(&t).ok()).ok_or("the server's login gave an odd answer")?;
+    let page = start["url"].as_str().ok_or("the server's login gave no page")?.to_string();
+    let poll = start["poll"].as_str().ok_or("the server's login gave no way to follow it")?.to_string();
+    crate::updater::open_url(&page);
+    opened(&page);
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < std::time::Duration::from_secs(600) {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let Ok(r) = agent.get(&poll).call() else { continue };
+        let Some(v) = r.into_string().ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else { continue };
+        match v["status"].as_str().unwrap_or("") {
+            "done" => {
+                return Ok(core::logins::Saved {
+                    token: v["token"].as_str().unwrap_or_default().to_string(),
+                    name: v["name"].as_str().unwrap_or_default().to_string(),
+                    expires: v["expires"].as_u64().unwrap_or(0),
+                })
+            }
+            "error" => return Err(v["error"].as_str().unwrap_or("the login did not work out").to_string()),
+            _ => {}
+        }
+    }
+    Err("no login within ten minutes".into())
 }

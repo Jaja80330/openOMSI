@@ -1557,3 +1557,30 @@ fn a_server_lets_in_only_the_games_with_what_it_requires() {
     assert!(!old.connected);
     assert_eq!(old.turned_away.as_deref(), Some("get the radio edition"));
 }
+
+#[test]
+fn a_server_with_a_login_lets_in_a_token_and_names_the_player_by_it() {
+    let key = b"0123456789abcdef0123456789abcdef".to_vec();
+    let mut host = LanSession::host(27936, "Server", world("m"), true).unwrap();
+    host.require_login(key.clone(), "log in with Discord first".into());
+    let port = host.local_addr().unwrap().port();
+    // without a token: turned away, told why
+    let mut stranger = LanSession::join(&port.to_string(), "stranger", world("m"), Duration::from_secs(1)).unwrap();
+    for _ in 0..120 {
+        host.tick(0.06, &pose(0.0));
+        stranger.tick(0.06, &pose(80.0));
+        if stranger.turned_away.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(stranger.turned_away.as_deref(), Some("log in with Discord first"));
+    // with one: in, under the token's name whatever the game calls itself
+    let mut c = LanSession::join(&port.to_string(), "whatever", world("m"), Duration::from_secs(1)).unwrap();
+    c.set_join_token(&login::issue(&key, "42", "Jean TLA", 4_000_000_000));
+    pump(&mut [&mut host, &mut c], &[pose(0.0), pose(50.0)], 120, |s| s[1].connected && s[0].peers().any(|p| p.has_info));
+    assert!(c.connected);
+    let me = c.my_id;
+    assert_eq!(host.logins.get(&me).map(String::as_str), Some("42"));
+    assert_eq!(host.peers().find(|p| p.pose.id == me).map(|p| p.label()), Some("Jean TLA".to_string()));
+}

@@ -33,6 +33,8 @@ fn home() -> PathBuf {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default()
 }
 
+pub mod logins;
+
 pub fn data_dir() -> PathBuf {
     let d = home().join(".openomsi");
     let _ = std::fs::create_dir_all(&d);

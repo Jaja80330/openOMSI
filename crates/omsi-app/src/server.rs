@@ -54,6 +54,11 @@ pub(crate) struct ServerCfg {
     /// without them is told.
     pub require: Vec<String>,
     pub require_message: String,
+    /// The server's own login (`omsi_net::login`): the key its tokens are signed with (hex),
+    /// where players log in, and what a game without a valid token is told.
+    pub join_key: Option<Vec<u8>>,
+    pub join_login: String,
+    pub join_message: String,
 }
 
 pub(crate) const DEFAULT_CFG: &str = "\
@@ -114,6 +119,14 @@ vehicles =
 # tell anyone who asks the web port (GET /players) the players' names, buses, lines and
 # positions - for a live map of the server on a website; tell your players when it is on
 share_positions = 0
+
+# a login of the server's own (a web page that knows its players): only games with a token it
+# signed get in, and each player is called by the name in it. join_key is the key shared with
+# the login (hex, at least 16 bytes; empty: no login), join_login where the launcher sends the
+# player to log in, join_message what a game without a valid token is told
+join_key =
+join_login =
+join_message =
 
 # only games with these features get in (separated by commas): radio - the dispatch radio
 # (a game that does not have it is turned away and shown require_message; empty: any game)
@@ -179,6 +192,9 @@ impl ServerCfg {
             voice: crate::voice::VoiceServer::from_kv(|k| kv.get(k).cloned()),
             require: kv.get("require").map(|v| v.split([',', ';', ' ']).map(|x| x.trim().to_ascii_lowercase()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
             require_message: get("require_message", ""),
+            join_key: kv.get("join_key").and_then(|k| omsi_net::login::key_of(k)),
+            join_login: get("join_login", ""),
+            join_message: get("join_message", ""),
         })
     }
 }
@@ -201,6 +217,7 @@ pub(crate) fn info_of(cfg: &ServerCfg) -> omsi_net::ws::ServerInfo {
         players_public: cfg.share_positions,
         player_list: Vec::new(),
         local_admin_password: cfg.admin_password.clone(),
+        login: if cfg.join_key.is_some() { cfg.join_login.clone() } else { String::new() },
         ..Default::default()
     }
 }
@@ -215,6 +232,7 @@ pub(crate) fn prepare(args: &mut Args, path: &Path) -> Result<ServerCfg> {
     let _ = SERVER_VEHICLES.set(cfg.vehicles.clone());
     let _ = SERVER_VOICE.set(cfg.voice.clone());
     let _ = SERVER_REQUIRE.set((cfg.require.clone(), cfg.require_message.clone()));
+    let _ = SERVER_LOGIN.set(cfg.join_key.clone().map(|k| (k, cfg.join_message.clone())));
     args.map = cfg.map.clone();
     args.time = cfg.time.clone();
     if let Some(d) = &cfg.date {
@@ -255,6 +273,8 @@ pub(crate) static SERVER_METAR: std::sync::OnceLock<Option<String>> = std::sync:
 
 /// The buses a dedicated server allows (`vehicles`; empty: every bus it has).
 pub(crate) static SERVER_VEHICLES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+/// The login's key and what a game without a valid token is told (`ServerCfg::join_key`).
+pub(crate) static SERVER_LOGIN: std::sync::OnceLock<Option<(Vec<u8>, String)>> = std::sync::OnceLock::new();
 /// What a joining game must have (`ServerCfg::require`) and what one without it is told.
 pub(crate) static SERVER_REQUIRE: std::sync::OnceLock<(Vec<String>, String)> = std::sync::OnceLock::new();
 

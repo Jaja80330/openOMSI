@@ -48,6 +48,9 @@ pub struct ServerInfo {
     pub reached_at: String,
     /// `GET /players` answers (the server shares its players' positions); otherwise 404.
     pub players_public: bool,
+    /// The server's own login (`login`): where the launcher has the player log in before
+    /// joining (empty: none).
+    pub login: String,
     /// The players now, for `GET /players`.
     pub player_list: Vec<PlayerInfo>,
     /// `POST /admin` from this machine with this password (empty: no such door).
@@ -144,7 +147,7 @@ pub fn players_json(players: &[PlayerInfo]) -> String {
 impl ServerInfo {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"name\":{},\"motd\":{},\"map\":{},\"players\":{},\"max_players\":{},\"version\":{},\"icon\":{},\"time\":{},\"weather\":{},\"password\":{},\"protocol\":{},\"vehicles\":{},\"world\":{}}}",
+            "{{\"name\":{},\"motd\":{},\"map\":{},\"players\":{},\"max_players\":{},\"version\":{},\"icon\":{},\"time\":{},\"weather\":{},\"password\":{},\"protocol\":{},\"vehicles\":{},\"login\":{},\"world\":{}}}",
             json_str(&self.name),
             json_str(&self.motd),
             json_str(&self.map),
@@ -157,6 +160,7 @@ impl ServerInfo {
             self.password,
             crate::PROTOCOL,
             json_str(&self.vehicles.join(";")),
+            json_str(&self.login),
             self.world.map(|w| w.to_json()).unwrap_or_else(|| "null".into())
         )
     }
@@ -177,6 +181,7 @@ impl ServerInfo {
             weather: text("weather").unwrap_or_default(),
             password: json_value(s, "password").map(|v| v.trim() == "true").unwrap_or(false),
             vehicles: text("vehicles").map(|v| v.split(';').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
+            login: text("login").unwrap_or_default(),
             reached_at: String::new(),
             ..Default::default()
         })

@@ -247,6 +247,38 @@ impl Launcher {
         }
     }
 
+    /// A server's own login under way: what to do in the browser, the page again, Cancel.
+    pub(super) fn draw_login_dialog(&mut self) {
+        let Some((url, error)) = self.state.login.as_ref().map(|l| (l.url.clone(), l.error.clone())) else { return };
+        let size = self.ui.size;
+        let full = Rect::new(0.0, 0.0, size.x, size.y);
+        self.ui.solid(full);
+        self.ui.p().rect(full, omsi_ui::Color::rgba(0, 0, 0, 0.62));
+        let w = (size.x - 48.0).min(560.0);
+        let text = match (&error, &url) {
+            (Some(e), _) => omsi_ui::tr("The login did not work out:").into_owned() + " " + e,
+            (None, Some(_)) => omsi_ui::tr("This server needs you to log in with Discord. Finish in your browser: the game starts by itself once you are logged in.").into_owned(),
+            (None, None) => omsi_ui::tr("Opening the server's login…").into_owned(),
+        };
+        let th = self.ui.paragraph_height(&text, w - 48.0, 14.0, Weight::Regular).min(size.y * 0.4);
+        let h = (150.0 + th).min(size.y - 24.0);
+        let r = Rect::new((size.x - w) * 0.5, (size.y - h) * 0.5, w, h);
+        self.ui.panel(r);
+        let inner = Rect::new(r.x + 24.0, r.y + 20.0, r.w - 48.0, r.h - 40.0);
+        self.ui.icon(if error.is_some() { "error" } else { "account_circle" }, Vec2::new(inner.x + 14.0, inner.y + 14.0), 26.0, if error.is_some() { DANGER } else { ACCENT });
+        self.ui.text_in("Log in to the server", Rect::new(inner.x + 38.0, inner.y, inner.w - 38.0, 28.0), 18.0, Weight::Bold, TEXT, Align::Left);
+        self.ui.paragraph(&text, Vec2::new(inner.x, inner.y + 44.0), inner.w, 14.0, Weight::Regular, TEXT_SOFT);
+        let by = inner.bottom() - 38.0;
+        if self.ui.button("login-cancel", Rect::new(inner.right() - 110.0, by, 110.0, 38.0), if error.is_some() { "Close" } else { "Cancel" }, None, ButtonKind::Normal) {
+            self.state.cancel_login();
+        }
+        if let (Some(u), None) = (url, &error) {
+            if self.ui.button("login-reopen", Rect::new(inner.right() - 300.0, by, 180.0, 38.0), "Open the page again", None, ButtonKind::Primary) {
+                crate::updater::open_url(&u);
+            }
+        }
+    }
+
     /// A game started from here ended on an error: what it said, and the ways to report it
     /// (the end of its log copied, or a GitHub issue opened with it).
     pub(super) fn draw_crash_dialog(&mut self) {

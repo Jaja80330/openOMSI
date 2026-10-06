@@ -1008,6 +1008,12 @@ pub fn update_server_players(list: Vec<omsi_net::ws::PlayerInfo>) {
 }
 
 /// A server run: the admin commands that came to the web gateway's `POST /admin`.
+/// The token of the server's own login (`omsi_net::login`) for the server at `target`: the
+/// one the launcher got and kept (`OMSI_JOIN_TOKEN` over it); empty: none.
+fn join_token(target: &str) -> String {
+    omsi_cfg::env::var("OMSI_JOIN_TOKEN").ok().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| omsi_launcher_lib::logins::token_for(target))
+}
+
 pub fn take_local_admin() -> Vec<String> {
     if let Ok(w) = WS_PATH.lock() {
         if let Some(g) = w.as_ref().and_then(|w| w.gateway.as_ref()) {
@@ -1051,6 +1057,10 @@ pub fn start(args: &Args) -> Option<LanSession> {
                     if let Some((features, message)) = crate::server::SERVER_REQUIRE.get() {
                         s.require(features.clone(), message.clone());
                     }
+                    // a server with a login of its own (`omsi_net::login`)
+                    if let Some(Some((key, message))) = crate::server::SERVER_LOGIN.get() {
+                        s.require_login(key.clone(), message.clone());
+                    }
                     Some(s)
                 }
                 Err(e) => {
@@ -1082,7 +1092,10 @@ pub fn start(args: &Args) -> Option<LanSession> {
                 }
             };
             match LanSession::join(&direct, &player_name(args), world, Duration::from_secs(3)) {
-                Ok(s) => Some(s),
+                Ok(mut s) => {
+                    s.set_join_token(&join_token(target));
+                    Some(s)
+                }
                 Err(e) => {
                     log::warn!("LAN: cannot join '{target}': {e}");
                     write_failure(&format!("cannot join '{target}': {e}"));
@@ -1131,6 +1144,7 @@ pub fn start(args: &Args) -> Option<LanSession> {
                 if let Some(ws) = omsi_net::ws::ws_url(&url) {
                     match ws_join_target(&ws).and_then(|local| LanSession::join(&local, &player_name(args), world_info(args), Duration::from_secs(3))) {
                         Ok(mut s2) => {
+                            s2.set_join_token(&join_token(args.lan_join.as_deref().unwrap_or("")));
                             let t1 = Instant::now();
                             while t1.elapsed() < WELCOME_WAIT * 2 && !s2.connected && s2.rejected.is_none() {
                                 s2.tick(0.02, &planned);
