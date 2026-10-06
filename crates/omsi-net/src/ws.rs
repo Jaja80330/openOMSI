@@ -293,6 +293,13 @@ pub fn web_bases(target: &str) -> Vec<String> {
             add(format!("http://{host}:{}", p + 10));
         }
     }
+    // a domain without a port is most often a server behind a web server (https): asked
+    // there first - its 27025 is closed as a rule, and waiting for it held the list for
+    // seconds; an IP address is most often the game server itself
+    let domain = port.is_none() && host.parse::<std::net::IpAddr>().is_err() && !host.starts_with('[') && host.contains('.');
+    if domain {
+        add(format!("https://{host}"));
+    }
     add(format!("http://{host}:27025"));
     if port.is_none() {
         add(format!("https://{host}"));
@@ -997,7 +1004,9 @@ mod tests {
         assert_eq!(ws_url("192.168.1.4:27015"), None);
         assert_eq!(http_base("https://abc.trycloudflare.com").as_deref(), Some("https://abc.trycloudflare.com"));
         assert_eq!(web_bases("192.168.1.4:27015"), ["http://192.168.1.4:27015", "http://192.168.1.4:27025"]);
-        assert_eq!(web_bases("play.example.org"), ["http://play.example.org:27025", "https://play.example.org", "http://play.example.org"]);
+        // (a domain: https first - its 27025 is closed as a rule)
+        assert_eq!(web_bases("play.example.org"), ["https://play.example.org", "http://play.example.org:27025", "http://play.example.org"]);
+        assert_eq!(web_bases("192.168.1.4")[0], "http://192.168.1.4:27025");
         assert_eq!(web_bases("::1")[0], "http://[::1]:27025");
         assert_eq!(web_bases("[::1]:27025"), ["http://[::1]:27025", "http://[::1]:27035"]);
     }

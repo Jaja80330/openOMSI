@@ -539,11 +539,9 @@ impl App {
         self.scene = Some(scene);
         // fully specified runs skip the menu
         if self.args.bus.is_some() || self.args.cam.is_some() || self.args.no_menu {
-            // (the one window: its first picture is the loading screen, which stays while the
-            // world is read - not a black or a stale one)
-            if crate::platform::big_picture() {
-                self.still_frame(&omsi_ui::tr("Loading"));
-            }
+            // (its first picture is the loading screen, which stays while the world is read -
+            // not a black or a stale one)
+            self.load_frame(&omsi_ui::tr("Reading the map"), 0.04);
             self.load_world_now(event_loop);
         } else {
             let mut fonts = omsi_sim::texttex::FontLibrary::new(&self.args.root);
@@ -896,6 +894,11 @@ impl App {
                 self.started.elapsed().as_secs_f64(),
                 w.loaded_tiles().len()
             );
+            // (the bus, the passengers and the traffic hold the window a moment: said so)
+            self.renderer = Some(renderer);
+            self.scene = Some(scene);
+            self.load_frame(&omsi_ui::tr("Placing the bus and the traffic"), LOAD_TILES.1);
+            let (renderer, mut scene) = (self.renderer.take().expect("renderer"), self.scene.take().expect("scene"));
             self.start_world(w, cam, &renderer, &mut scene);
             self.renderer = Some(renderer);
             self.scene = Some(scene);
@@ -912,7 +915,9 @@ impl App {
                 }
             })
             .unwrap_or_default();
+        let _ = name;
         let mut reconfigure = false;
+        let screen = self.load_screen(format!("{} · {done} / {total}", omsi_ui::tr("Loading the surroundings")), LOAD_TILES.0 + (LOAD_TILES.1 - LOAD_TILES.0) * done as f32 / total.max(1) as f32);
         if let (Some(ui), Some(s), Some(win)) = (
             self.ui.as_mut(),
             self.surface.as_ref(),
@@ -921,16 +926,7 @@ impl App {
             scene.overlays.clear();
             let dpi = win.scale_factor() as f32;
             let scale = dpi * crate::ui::size_factor(s.config.height as f32, dpi, self.settings.ui_scale, self.settings.ui_scale_window);
-            ui.loading(
-                &renderer,
-                &mut scene,
-                s.config.width as f32,
-                s.config.height as f32,
-                scale,
-                name.trim(),
-                "",
-                done as f32 / total.max(1) as f32,
-            );
+            ui.loading(&renderer, &mut scene, s.config.width as f32, s.config.height as f32, scale, &screen);
             let acquired = s.surface.get_current_texture();
             // a swapchain that no longer fits the window (Vulkan says so after the switch
             // to full screen, without a resize event) is made again, as the game's own
@@ -991,16 +987,56 @@ impl App {
         false
     }
 
+    /// What the loading screen shows now: `status` and the progress, the map, the bus, the
+    /// server joined.
+    pub(crate) fn load_screen(&self, status: String, progress: f32) -> crate::ui::LoadScreen {
+        let map = self
+            .world
+            .as_ref()
+            .map(|w| if w.global.friendly_name.trim().is_empty() { w.global.name.clone() } else { w.global.friendly_name.clone() })
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| {
+                // (before the map is read: its folder's name)
+                let p = self.args.map.replace('\\', "/");
+                p.trim_end_matches("/global.cfg").rsplit('/').next().unwrap_or("").replace(['_', '-'], " ")
+            });
+        let bus = self.args.bus.as_deref().map(|b| b.replace('\\', "/")).and_then(|b| b.rsplit('/').next().map(|f| f.trim_end_matches(".bus").replace('_', " "))).unwrap_or_default();
+        let mut sub = bus;
+        if let (Some(line), Some(tour)) = (self.args.line.as_deref(), self.args.tour.as_deref()) {
+            sub.push_str(&format!(" · {} {line} / {tour}", omsi_ui::tr("Line")));
+        }
+        let server = self.lan.as_ref().filter(|l| l.role == omsi_net::Role::Client).map(|l| {
+            let name = l.welcome.as_ref().map(|w| w.host_name.clone()).filter(|n| !n.trim().is_empty()).or_else(|| self.args.lan_join.clone()).unwrap_or_default();
+            format!("{} {name}", omsi_ui::tr("Server:"))
+        });
+        let tips = &crate::launcher::title::TIPS;
+        let tip = omsi_ui::tr(tips[(map.len() + self.args.time.len()) % tips.len()]).into_owned();
+        crate::ui::LoadScreen { status, title: map.trim().to_string(), sub, server, progress, tip }
+    }
+
+    /// One picture of the loading screen while a step holds the window (the map read, the bus
+    /// placed): what is done, the bar where it is.
+    pub(crate) fn load_frame(&mut self, status: &str, progress: f32) {
+        let screen = self.load_screen(status.to_string(), progress);
+        self.draw_load_screen(&screen);
+    }
+
     /// One picture of the loading screen with `title` (the one window: the session being
     /// written and the world let go, which holds the window for a moment).
     pub(crate) fn still_frame(&mut self, title: &str) {
+        let mut screen = self.load_screen(title.to_string(), 1.0);
+        screen.server = None;
+        self.draw_load_screen(&screen);
+    }
+
+    fn draw_load_screen(&mut self, screen: &crate::ui::LoadScreen) {
         let (Some(renderer), Some(mut scene)) = (self.renderer.take(), self.scene.take()) else { return };
         let mut renderer = renderer;
         if let (Some(ui), Some(s), Some(win)) = (self.ui.as_mut(), self.surface.as_ref(), self.window.as_ref()) {
             scene.overlays.clear();
             let dpi = win.scale_factor() as f32;
             let scale = dpi * crate::ui::size_factor(s.config.height as f32, dpi, self.settings.ui_scale, self.settings.ui_scale_window);
-            ui.loading(&renderer, &mut scene, s.config.width as f32, s.config.height as f32, scale, title, "", 1.0);
+            ui.loading(&renderer, &mut scene, s.config.width as f32, s.config.height as f32, scale, screen);
             if let wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) = s.surface.get_current_texture() {
                 let view = frame.texture.create_view(&Default::default());
                 let blank = Camera { position: DVec3::new(0.0, 0.0, -1.0e6), yaw: 0.0, pitch: -89.0, roll: 0.0, fov_deg: 60.0, near: 0.5, far: 10.0 };
@@ -1296,3 +1332,7 @@ mod cam_blend_tests {
         assert!(blend(0.2) > 0.4, "fast off the mark");
     }
 }
+
+/// Where the loading bar stands before and after the tiles around the start (the map read
+/// before, the bus and the traffic placed after).
+const LOAD_TILES: (f32, f32) = (0.12, 0.94);

@@ -20,7 +20,7 @@ mod state;
 pub(crate) use state::crash_of;
 mod theme;
 mod timetable;
-mod title;
+pub(crate) mod title;
 mod ui;
 mod update;
 

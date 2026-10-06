@@ -536,6 +536,24 @@ pub struct Ui {
     /// The dispatch radio's button (a request to be called), and whether the mouse is on it.
     pub radio_button: Option<[f32; 4]>,
     pub radio_hovered: bool,
+    /// The loading screen's bar as shown (it eases to the progress), and when it was drawn.
+    load_shown: f32,
+    load_last: Option<std::time::Instant>,
+}
+
+/// What the loading screen says (`Ui::loading`).
+pub struct LoadScreen {
+    /// What is being done now ("Reading the map", "The surroundings · 12 / 48").
+    pub status: String,
+    /// The map.
+    pub title: String,
+    /// The bus, its line and tour.
+    pub sub: String,
+    /// The server being joined (multiplayer).
+    pub server: Option<String>,
+    /// 0..1.
+    pub progress: f32,
+    pub tip: String,
 }
 
 /// Between the information bar's parts.
@@ -615,7 +633,7 @@ impl Ui {
         self.chat.rect[2] += x;
     }
     pub fn new() -> Option<Ui> {
-        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false })
+        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, load_shown: 0.0, load_last: None })
     }
 
     /// Draw the frame's interface: its overlays go after the HUD's in `scene.overlays`.
@@ -1180,31 +1198,77 @@ impl TextCache {
 impl Ui {
     /// The loading screen over a plain dark picture: the map's name in the middle, a thin
     /// bar of how far the start area got under it, and one quiet line (what is being done).
-    pub fn loading(&mut self, r: &Renderer, scene: &mut Scene, width: f32, height: f32, scale: f32, title: &str, caption: &str, progress: f32) {
+    /// The loading screen, as the launcher's in the one full screen window has it: what is
+    /// being done in the accent colour, the map large, the bus and the server under it, a
+    /// bar that follows the progress smoothly (it never jumps, never goes back), a tip.
+    pub fn loading(&mut self, r: &Renderer, scene: &mut Scene, width: f32, height: f32, scale: f32, l: &LoadScreen) {
         let s = scale.max(0.5);
-        let t = self.text.label(r, scene, title, (30.0 * s) as u32, [255, 255, 255, 0]);
-        let cy = height * 0.5;
-        let tx = (width - t.w as f32) * 0.5;
-        let ty = cy - t.h as f32 - 14.0 * s;
-        scene.overlays.push((t.tex, [tx, ty, tx + t.w as f32, ty + t.h as f32]));
-        let bw = (320.0 * s).min(width * 0.6);
+        // the bar eases towards the progress (a fast start, a soft landing)
+        let now = std::time::Instant::now();
+        let dt = self.load_last.map(|t| now.duration_since(t).as_secs_f32()).unwrap_or(0.0).min(0.25);
+        self.load_last = Some(now);
+        let target = l.progress.clamp(0.0, 1.0).max(self.load_shown);
+        self.load_shown += (target - self.load_shown) * (1.0 - (-dt * 5.0).exp());
+        if l.progress <= 0.0 && dt == 0.0 {
+            self.load_shown = 0.0;
+        }
+        let bg = self.text.solid(r, scene, [8, 9, 11, 255]);
+        scene.overlays.push((bg, [0.0, 0.0, width, height]));
+        // a soft light from the lower left, as the launcher's picture behind its text
+        let glow = self.text.solid(r, scene, [24, 27, 33, 255]);
+        scene.overlays.push((glow, [0.0, height * 0.55, width, height]));
+        let shade = self.text.solid(r, scene, [14, 16, 20, 255]);
+        scene.overlays.push((shade, [0.0, height * 0.45, width, height * 0.55]));
+        let x = 64.0 * s;
+        let y = height - 230.0 * s;
+        let put = |ui: &mut Ui, scene: &mut Scene, text: &str, px: f32, bold: bool, color: [u8; 4], x: f32, y: f32| {
+            let lb = ui.text.label(r, scene, text, (px * s) as u32 | if bold { BOLD } else { 0 }, color);
+            scene.overlays.push((lb.tex, [x, y, x + lb.w as f32, y + lb.h as f32]));
+            lb.h as f32
+        };
+        put(self, scene, &l.status, 14.0, true, [232, 160, 48, 0], x, y);
+        put(self, scene, &l.title, 46.0, true, [236, 236, 236, 0], x, y + 22.0 * s);
+        let mut sy = y + 86.0 * s;
+        if !l.sub.is_empty() {
+            sy += put(self, scene, &l.sub, 16.0, false, [200, 200, 200, 0], x, sy) + 2.0 * s;
+        }
+        if let Some(server) = l.server.as_deref() {
+            put(self, scene, server, 14.0, false, [142, 142, 142, 0], x, sy);
+        }
+        // the bar: a track, the progress, and a light that runs over the part done
+        let bw = (width - 2.0 * x).min(520.0 * s);
         let bh = (3.0 * s).max(2.0);
-        let bx = (width - bw) * 0.5;
-        let by = cy + 4.0 * s;
-        let track = self.text.plate(r, scene, 1);
-        scene.overlays.push((track, [bx, by, bx + bw, by + bh]));
-        let fill = self.text.plate(r, scene, 2);
-        let p = progress.clamp(0.0, 1.0);
-        if p > 0.0 {
-            scene.overlays.push((fill, [bx, by, bx + bw * p, by + bh]));
+        let by = y + 136.0 * s;
+        let track = self.text.solid(r, scene, [40, 41, 44, 255]);
+        scene.overlays.push((track, [x, by, x + bw, by + bh]));
+        let done = bw * self.load_shown;
+        if done > 0.5 {
+            let fill = self.text.solid(r, scene, [232, 160, 48, 255]);
+            scene.overlays.push((fill, [x, by, x + done, by + bh]));
+            let t = (self.anim_clock() * 0.7).fract();
+            let seg = (done * 0.25).min(90.0 * s);
+            let sx = x + (done + seg) * t - seg;
+            let (a, b) = (sx.max(x), (sx + seg).min(x + done));
+            if b > a {
+                let sheen = self.text.solid(r, scene, [255, 214, 150, 255]);
+                scene.overlays.push((sheen, [a, by, b, by + bh]));
+            }
         }
-        if !caption.is_empty() {
-            let c = self.text.label(r, scene, caption, (13.0 * s) as u32, [200, 204, 210, 0]);
-            let cx = (width - c.w as f32) * 0.5;
-            let cy2 = by + bh + 14.0 * s;
-            scene.overlays.push((c.tex, [cx, cy2, cx + c.w as f32, cy2 + c.h as f32]));
+        let pct = format!("{} %", (self.load_shown * 100.0).round() as u32);
+        let pl = self.text.label(r, scene, &pct, (12.0 * s) as u32, [142, 142, 142, 0]);
+        scene.overlays.push((pl.tex, [x + bw + 12.0 * s, by - pl.h as f32 * 0.5, x + bw + 12.0 * s + pl.w as f32, by + pl.h as f32 * 0.5]));
+        if !l.tip.is_empty() {
+            put(self, scene, &l.tip, 13.0, false, [120, 120, 124, 0], x, height - 64.0 * s);
         }
+        let v = self.text.label(r, scene, crate::startup::VERSION, (12.0 * s) as u32, [110, 110, 114, 0]);
+        scene.overlays.push((v.tex, [width - 24.0 * s - v.w as f32, height - 34.0 * s, width - 24.0 * s, height - 34.0 * s + v.h as f32]));
         self.text.end_frame(r, scene);
+    }
+
+    /// Seconds since the interface began, for what runs by itself (the loading bar's light).
+    fn anim_clock(&self) -> f32 {
+        static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        T0.get_or_init(std::time::Instant::now).elapsed().as_secs_f32()
     }
 }
 

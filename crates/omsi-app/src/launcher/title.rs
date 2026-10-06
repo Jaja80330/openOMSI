@@ -265,7 +265,7 @@ pub(super) fn back_from_page(l: &mut Launcher) {
 // The loading screen: a drive is being made. It is the last picture the window shows until
 // the game's own loading screen takes over (making the game holds the window meanwhile).
 
-const TIPS: [&str; 6] = [
+pub(crate) const TIPS: [&str; 6] = [
     "Escape opens the game menu: options, the city map, the line and tour, the main menu.",
     "Kneel the bus at the stops: passengers with prams and wheelchairs get on more easily.",
     "Keep to the timetable: the profile counts how early or late you were at every stop.",
@@ -289,7 +289,18 @@ pub(super) fn draw_loading(l: &mut Launcher) {
     l.ui.p().gradient(bottom, Color::rgba(0, 0, 0, 0.0), Color::rgba(0, 0, 0, 0.8));
     let x = 64.0;
     let y = size.y - 230.0;
-    l.ui.text_in("Loading", Rect::new(x, y, size.x * 0.6, 22.0), 14.0, Weight::Bold, ACCENT, Align::Left);
+    // what is being done: joining a server (the game connects before it reads the map), or
+    // starting the drive
+    let c = &l.state.choice;
+    let joining = (c.lan_mode == "join").then(|| {
+        let key = l.state.joined_server.clone().unwrap_or_else(|| c.lan_addr.trim().to_string());
+        l.state.server_info.get(&key).and_then(|x| x.1.as_ref().ok()).map(|i| i.name.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or(key)
+    });
+    let status = match &joining {
+        Some(server) => format!("{} {server}…", omsi_ui::tr("Connecting to")),
+        None => omsi_ui::tr("Starting the drive").into_owned(),
+    };
+    l.ui.text_in(&status, Rect::new(x, y, size.x * 0.6, 22.0), 14.0, Weight::Bold, ACCENT, Align::Left);
     let map = l.state.map().map(|m| m.name.clone()).unwrap_or_default();
     l.ui.text_in(&map, Rect::new(x, y + 24.0, size.x - 2.0 * x, 60.0), 46.0, Weight::Black, TEXT, Align::Left);
     let mut sub = l.state.bus().map(|b| b.name.clone()).unwrap_or_default();
