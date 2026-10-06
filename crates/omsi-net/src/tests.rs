@@ -1533,3 +1533,27 @@ fn radio_frames_go_up_to_the_host_and_down_to_a_player() {
     pump(&mut [&mut host, &mut c], &[pose(0.0), pose(50.0)], 40, |s| !s[1].radio_in.is_empty());
     assert_eq!(c.take_radio(), vec![(dispatch::DISPATCHER, frame)]);
 }
+
+#[test]
+fn a_server_lets_in_only_the_games_with_what_it_requires() {
+    let mut host = LanSession::host(27933, "Server", world("m"), true).unwrap();
+    host.require(vec!["radio".into()], "get the radio edition".into());
+    let port = host.local_addr().unwrap().port();
+    // this game says it has the radio
+    let mut c = LanSession::join(&port.to_string(), "driver", world("m"), Duration::from_secs(1)).unwrap();
+    pump(&mut [&mut host, &mut c], &[pose(0.0), pose(50.0)], 120, |s| s[1].connected);
+    assert!(c.connected);
+    // a game that does not (an older one): turned away, told why
+    host.require(vec!["radio".into(), "teleporter".into()], "get the radio edition".into());
+    let mut old = LanSession::join(&port.to_string(), "old", world("m"), Duration::from_secs(1)).unwrap();
+    for _ in 0..120 {
+        host.tick(0.06, &pose(0.0));
+        old.tick(0.06, &pose(80.0));
+        if old.turned_away.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!old.connected);
+    assert_eq!(old.turned_away.as_deref(), Some("get the radio edition"));
+}
