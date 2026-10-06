@@ -105,6 +105,10 @@ pub use wire::{
 /// 6: up to 63 sound and moving-part values in a state (a 6-bit count: the AA-FR Agora's
 /// sound variables alone filled the 31 there was room for).
 pub const PROTOCOL: u32 = 6;
+/// What this game can do beyond the protocol, said in its `HELLO` (comma-separated): a
+/// server may let in only games that can (`LanSession::require`) - `radio`: the dispatch
+/// radio (`dispatch`). A host that knows nothing of it reads past it.
+pub const FEATURES: &str = "radio";
 /// (omsi-plugin's `MULTIPLAYER_PORTS` keeps `omsi.send` off this one and the `PORT_RANGE` after it.)
 pub const DEFAULT_PORT: u16 = 27015;
 /// Ports a host tries after the default one when that is taken (a second session on the
@@ -1435,6 +1439,9 @@ pub struct LanSession {
     gone_lately: Vec<(Option<u64>, String, u32, Instant)>,
     /// Players the host sent away (host): their nonces, so they are not let in again.
     banned: Vec<(u64, String)>,
+    /// The features a joining game must have (`FEATURES`), and what one without them is told.
+    required: Vec<String>,
+    required_message: String,
     /// Commands for this game (`command`): (from, text).
     commands: Vec<(u32, String)>,
     /// The dispatch radio's frames that came: (who speaks, frame) - a host's from its
@@ -1529,6 +1536,8 @@ impl LanSession {
             bridge: None,
             gone_lately: Vec::new(),
             banned: Vec::new(),
+            required: Vec::new(),
+            required_message: String::new(),
             commands: Vec::new(),
             radio_in: Vec::new(),
             clock_speed: 1.0,
@@ -1837,6 +1846,16 @@ impl LanSession {
                 }
             }
         }
+    }
+
+    /// Host: let in only games that have these features (`FEATURES`); one without them is
+    /// turned away and told `message` (empty: a message that names the feature).
+    pub fn require(&mut self, features: Vec<String>, message: String) {
+        if !features.is_empty() {
+            log::info!("LAN: only games with {} get in", features.join(", "));
+        }
+        self.required = features;
+        self.required_message = message;
     }
 
     /// The commands that came for this game: (from, text).
@@ -2190,7 +2209,7 @@ impl LanSession {
             "-".to_string()
         };
         let msg = format!(
-            "HELLO|{PROTOCOL}|{session}|{}|{}|{}|{:016X}",
+            "HELLO|{PROTOCOL}|{session}|{}|{}|{}|{:016X}|{FEATURES}",
             self.my_name,
             vehicle_path(&mine.bus).unwrap_or_default(),
             self.world.fields(),
@@ -3045,6 +3064,18 @@ impl LanSession {
         if proto != PROTOCOL {
             log::warn!("LAN: {from} speaks protocol {proto}, we speak {PROTOCOL}; turned away");
             self.reject(from, &format!("the host runs LAN protocol {PROTOCOL}, your game protocol {proto} - both players need the same version of the game"));
+            return;
+        }
+        // a game without what this host requires (an older one, or another build of it)
+        let has: Vec<&str> = field(parts, 11).split(',').map(str::trim).collect();
+        if let Some(missing) = self.required.iter().find(|f| !has.contains(&f.as_str())) {
+            log::warn!("LAN: '{name}' at {from} has no {missing} in its game; turned away");
+            let why = if self.required_message.is_empty() {
+                format!("this server needs a game with the {missing} feature - update openOMSI")
+            } else {
+                self.required_message.clone()
+            };
+            self.reject(from, &why);
             return;
         }
         let asked = field(parts, 2);
