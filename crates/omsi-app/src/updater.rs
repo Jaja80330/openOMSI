@@ -42,10 +42,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// The project on GitHub.
-pub const REPO: &str = "openOMSI-Project/openOMSI";
-pub const REPO_URL: &str = "https://github.com/openOMSI-Project/openOMSI";
-const LATEST_API: &str = "https://api.github.com/repos/openOMSI-Project/openOMSI/releases/latest";
+/// The project on GitHub: this edition (Big Picture, the dispatch radio) updates from its own
+/// releases, not from openOMSI-Project's (which would take them away).
+pub const REPO: &str = "Jaja80330/openOMSI";
+pub const REPO_URL: &str = "https://github.com/Jaja80330/openOMSI";
+const LATEST_API: &str = "https://api.github.com/repos/Jaja80330/openOMSI/releases/latest";
 
 /// A release newer than this build, with the file for this platform.
 #[derive(Clone, Debug, PartialEq)]
