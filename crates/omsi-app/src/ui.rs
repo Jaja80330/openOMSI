@@ -39,6 +39,12 @@ pub struct TextCache {
 }
 
 impl TextCache {
+    fn add_texture(r: &Renderer, scene: &mut Scene, img: &omsi_texture::Image) -> TextureId {
+        let tex = r.add_texture(scene, img, false);
+        r.retain_overlay_texture(scene, tex);
+        tex
+    }
+
     pub fn new() -> Option<TextCache> {
         let mut font = FontVec::try_from_vec(ROBOTO.to_vec()).ok()?;
         // a little heavier than the regular 400: light text on a dark panel is thin and
@@ -65,7 +71,7 @@ impl TextCache {
         }
         let font = if px & BOLD != 0 { &self.bold } else { &self.font };
         let img = render_text(font, text, (px & !BOLD) as f32, color);
-        let tex = r.add_texture(scene, &img, false);
+        let tex = Self::add_texture(r, scene, &img);
         let l = Label { tex, w: img.width, h: img.height, used: self.frame };
         self.labels.insert(key, l);
         l
@@ -904,7 +910,9 @@ impl Ui {
                 let entry = self.images.entry(p.to_path_buf()).or_insert_with(|| {
                     omsi_texture::decode_file(p).ok().map(|img| {
                         let (iw, ih) = (img.width, img.height);
-                        (r.add_texture(scene, &img, false), iw, ih)
+                        let tex = r.add_texture(scene, &img, false);
+                        r.retain_overlay_texture(scene, tex);
+                        (tex, iw, ih)
                     })
                 });
                 if let Some((tex, iw, ih)) = *entry {
@@ -1011,7 +1019,7 @@ impl TextCache {
             }
         }
         let image = omsi_texture::Image { width: W as u32, height: H as u32, rgba, has_alpha: true };
-        let tex = r.add_texture(scene, &image, false);
+        let tex = Self::add_texture(r, scene, &image);
         self.labels.insert(key, Label { tex, w: W as u32, h: H as u32, used: self.frame });
         tex
     }
@@ -1048,7 +1056,7 @@ impl TextCache {
             return l.tex;
         }
         let img = omsi_texture::Image { width: 1, height: 1, rgba, has_alpha: true };
-        let tex = r.add_texture(scene, &img, false);
+        let tex = Self::add_texture(r, scene, &img);
         self.labels.insert(key, Label { tex, w: 1, h: 1, used: self.frame });
         tex
     }
@@ -1061,7 +1069,7 @@ impl TextCache {
             return l.tex;
         }
         let img = omsi_texture::Image { width: 1, height: 1, rgba: rgba.to_vec(), has_alpha: true };
-        let tex = r.add_texture(scene, &img, false);
+        let tex = Self::add_texture(r, scene, &img);
         self.labels.insert(key, Label { tex, w: 1, h: 1, used: u64::MAX / 2 });
         tex
     }
@@ -1087,7 +1095,7 @@ impl TextCache {
             }
         }
         let img = omsi_texture::Image { width: rad, height: rad, rgba: data, has_alpha: true };
-        let tex = r.add_texture(scene, &img, false);
+        let tex = Self::add_texture(r, scene, &img);
         self.labels.insert(key, Label { tex, w: rad, h: rad, used: u64::MAX / 2 });
         tex
     }
@@ -1099,7 +1107,7 @@ impl TextCache {
             return l.tex;
         }
         let img = omsi_texture::Image { width: size.0, height: size.1, rgba: build(), has_alpha: true };
-        let tex = r.add_texture(scene, &img, false);
+        let tex = Self::add_texture(r, scene, &img);
         self.labels.insert(key, Label { tex, w: size.0, h: size.1, used: self.frame });
         tex
     }

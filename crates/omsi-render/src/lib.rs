@@ -1233,6 +1233,8 @@ pub struct Scene {
     sky_bind_group: Option<wgpu::BindGroup>,
     /// HUD images drawn after the scene: (texture, rect in pixels x0,y0,x1,y1).
     pub overlays: Vec<(TextureId, [f32; 4])>,
+    /// UI textures kept in a Rust-side cache must not have their last texture slot recycled.
+    retained_overlay_textures: std::collections::HashSet<TextureId>,
     /// Overlay textures that hold premultiplied alpha (drawn by `omsi-ui`, e.g. the
     /// navigator) rather than straight alpha.
     pub premultiplied: std::collections::HashSet<TextureId>,
@@ -4853,6 +4855,7 @@ impl Renderer {
             shadow_bind_group: None,
             sky_bind_group: None,
             overlays: Vec::new(),
+            retained_overlay_textures: Default::default(),
             premultiplied: Default::default(),
             transposed: Default::default(),
             overlay_res: Vec::new(),
@@ -5008,6 +5011,14 @@ impl Renderer {
         };
         scene.textures.push(t);
         scene.textures.len() - 1
+    }
+
+    /// Keep a UI texture alive at its slot while the interface caches its numeric id.
+    /// Texture slots may otherwise be popped and reused by streamed scenery.
+    pub fn retain_overlay_texture(&self, scene: &mut Scene, id: TextureId) {
+        if id < scene.textures.len() {
+            scene.retained_overlay_textures.insert(id);
+        }
     }
 
     pub fn add_blank_texture(&self, scene: &mut Scene, width: u32, height: u32) -> TextureId {
@@ -13035,6 +13046,9 @@ impl Renderer {
 
     /// Release a texture (a material still using it keeps it alive until it is freed too).
     pub fn free_texture(&self, scene: &mut Scene, id: TextureId) {
+        scene.retained_overlay_textures.remove(&id);
+        scene.premultiplied.remove(&id);
+        scene.transposed.remove(&id);
         scene.snow_textures.remove(&id);
         // (its PBR maps go with it: the slot is taken by another texture next)
         if let Some(m) = scene.pbr_maps.remove(&id) {
@@ -13155,7 +13169,11 @@ impl Renderer {
     }
 
     pub fn recycle_texture(&self, scene: &mut Scene, new: TextureId, into: TextureId) -> TextureId {
-        if new + 1 != scene.textures.len() || into >= new {
+        if new + 1 != scene.textures.len()
+            || into >= new
+            || scene.retained_overlay_textures.contains(&new)
+            || scene.retained_overlay_textures.contains(&into)
+        {
             return new;
         }
         let t = scene.textures.pop().unwrap();
