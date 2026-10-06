@@ -24275,6 +24275,17 @@ _version: 2
 
   pt: "falando"
   pt-pt: "a falar"
+"radio":
+  de: "Funk"
+  fr: "radio"
+  pl: "radio"
+  ru: "рация"
+  uk: "рація"
+  zh: "对讲"
+  zh-tw: "對講"
+  pt: "rádio"
+  pt-pt: "rádio"
+  ca: "ràdio"
 "Beige":
   ca: "Beix"
   fr: "Beige"
@@ -24842,6 +24853,17 @@ _version: 2
 
   pt: "Noite"
   pt-pt: "Noite"
+"Multiplayer: bus radio (hold)":
+  de: "Multiplayer: Busfunk (halten)"
+  fr: "Multijoueur : radio bus (maintenir)"
+  pl: "Multiplayer: radio autobusowe (trzymaj)"
+  ru: "Мультиплеер: автобусная рация (удерж.)"
+  uk: "Мультиплеєр: автобусна рація (утрим.)"
+  zh: "多人：巴士对讲（按住）"
+  zh-tw: "多人：巴士對講（按住）"
+  pt: "Multijogador: rádio do ônibus (segurar)"
+  pt-pt: "Multijogador: rádio do autocarro (manter)"
+  ca: "Multijugador: ràdio del bus (mantenir)"
 "Multiplayer: write in the chat":
   ca: "Multijugador: escriu al xat"
   fr: "Multijoueur : écrire dans le chat"

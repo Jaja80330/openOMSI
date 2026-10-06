@@ -666,7 +666,6 @@ impl ApplicationHandler for App {
                 // the bus frame, and placing them on the pose of the frame before made everyone
                 // aboard tremble at speed (a quarter of a metre behind the seat, every frame).
                 let __t = Instant::now();
-                self.drag_frame();
                 // the tutorial's pages, once the world is there
                 if self.world.is_some() {
                     if let Some(n) = self.args.tutorial.take() {
@@ -757,14 +756,21 @@ impl ApplicationHandler for App {
                     self.look_by(analog.look[0] * k, analog.look[1] * k);
                 }
                 // a gamepad's stick: a target the wheel turns towards at a hand's pace (the
-                // whole lock in 1.2 s), not the wheel's place itself (#200)
-                if analog.stick {
-                    if let (Some(x), Some(p)) = (analog.steering, self.player.as_ref()) {
-                        let target = crate::controllers::gamepad_steering(x, p.vehicle.physics.velocity_kmh() as f32);
-                        let now = p.vehicle.physics.controls.steering;
-                        let step = dt / 1.2;
-                        analog.steering = Some(now + (target - now).clamp(-step, step));
-                    }
+                // whole lock in 1.2 s), not the wheel's place itself (#200). The target is
+                // smoothed first (`pad_steer_smooth`)
+                let stick = analog.stick.then_some(analog.steering).flatten().zip(self.player.as_ref());
+                if let Some((x, p)) = stick {
+                    let now = p.vehicle.physics.controls.steering;
+                    let kmh = p.vehicle.physics.velocity_kmh() as f32;
+                    self.pad_kmh = crate::controllers::smooth_toward(self.pad_kmh, kmh, dt, 0.4);
+                    let target = crate::controllers::gamepad_steering(x, self.pad_kmh);
+                    self.pad_steer_target = crate::controllers::smooth_toward(self.pad_steer_target, target, dt, self.settings.pad_steer_smooth / 1000.0);
+                    let step = dt / 1.2;
+                    analog.steering = Some(now + (self.pad_steer_target - now).clamp(-step, step));
+                } else if let Some(p) = self.player.as_ref() {
+                    // (the stick picks up from where the wheel is, at the bus's speed)
+                    self.pad_steer_target = p.vehicle.physics.controls.steering;
+                    self.pad_kmh = p.vehicle.physics.velocity_kmh() as f32;
                 }
                 // (in every view of the bus - driver, outside, passenger and the map camera -
                 // as in OMSI, where switching the camera leaves the mouse steering on: its
@@ -847,7 +853,8 @@ impl ApplicationHandler for App {
                     }
                 }
                 // the controller's view buttons are the game's, not the bus's: looking around
-                // while held (`view_look_*`), and OMSI's view actions (other cameras, views)
+                // while held (`view_look_*`), the bus radio while held (`voice_radio`), and
+                // OMSI's view actions (other cameras, views)
                 let mut actions = actions;
                 {
                     let menu_open = self.game_menu.is_some() || self.chooser.is_some();
@@ -857,6 +864,11 @@ impl ApplicationHandler for App {
                         let n = name.to_ascii_lowercase();
                         if let Some(k) = ["view_look_left", "view_look_right", "view_look_up", "view_look_down"].iter().position(|x| *x == n) {
                             self.pad_look[k] = *down;
+                            return false;
+                        }
+                        // hold-to-talk: track press/release like `view_look_*`, do not fire once
+                        if n == "voice_radio" {
+                            self.pad_voice_radio = *down;
                             return false;
                         }
                         if n == "gear_up" || n == "gear_down" {
@@ -916,6 +928,14 @@ impl ApplicationHandler for App {
                             self.in_cab,
                             !matches!(self.view.as_str(), "free" | "foot"),
                         );
+                        // After scripts: zero-movement `_drag` for a held switch. Running this
+                        // *before* `tick` cleared Aachen ibox momentary flags (incl. digit 0 /
+                        // `ibox_taste_D11`) before the frame could act when the click path had
+                        // not already consumed them (#744).
+                        if self.dragging {
+                            let (dx, dy) = std::mem::take(&mut self.drag_delta);
+                            p.drag(dx, dy);
+                        }
                         // (not in the headset: the player's own head moves there, and a head
                         // thrown about by the bus on top of it made the whole cab sway and
                         // shift before the eyes)
@@ -940,6 +960,10 @@ impl ApplicationHandler for App {
                         if let Some(w) = self.world.as_ref() {
                             crate::rail_drive::frame(p, self.traffic.as_ref().map(|t| &t.net), w, dt);
                         }
+                    } else if self.dragging {
+                        // paused / no ground: still deliver held-switch `_drag` (was unconditional before)
+                        let (dx, dy) = std::mem::take(&mut self.drag_delta);
+                        p.drag(dx, dy);
                     }
                     // a script that set the time of day (`(S.S.Time)`) moves the game's clock
                     if let Some(t) = p.vehicle.host.time_written.take() {
@@ -1953,6 +1977,12 @@ impl ApplicationHandler for App {
                         }
                         let __tr = Instant::now();
                         self.rain.tick(if self.paused { 0.0 } else { dt }, cam.position, wind, scene, &buses);
+                        // the player's bus's cabin air and the condensation on its glass
+                        if let Some(p) = self.player.as_ref() {
+                            let (riders, doors) = self.humans.as_ref().map(|h| (h.riding(), crate::condensation::open_doors(&h.cabin_doors(crate::humans::BusId::Player)))).unwrap_or((0, 0));
+                            let ci = crate::condensation::inputs_for(&p.vehicle, wt, riders, doors);
+                            self.cabin_air.step(if self.paused { 0.0 } else { dt }, &ci);
+                        }
                         *self.profile.entry("lights.rain").or_default() += __tr.elapsed().as_secs_f64();
                         // what every vehicle's tyres throw up from the water on the road: the
                         // puddles and the wet asphalt the renderer draws (the same wetness:
@@ -2281,6 +2311,7 @@ impl ApplicationHandler for App {
                         let mut tags = if self.settings.name_tags {
                             let voice = self.voice.as_ref();
                             let speaks = |name: &str, id: u32| voice.is_some_and(|v| v.speaks(name, id));
+                            let on_radio = |name: &str, id: u32| voice.is_some_and(|v| v.on_radio(name, id));
                             let rig = (self.settings.triple.enabled
                                 && !self.settings.vr_requested())
                             .then(|| {
@@ -2300,6 +2331,7 @@ impl ApplicationHandler for App {
                                         h,
                                         rig.as_ref(),
                                         &speaks,
+                                        &on_radio,
                                     )
                                 })
                                 .unwrap_or_default()
@@ -2424,7 +2456,9 @@ impl ApplicationHandler for App {
                 lighting.puddle_parts = puddle_vehicle.into_iter().flat_map(|v| &v.trailers)
                     .filter_map(|t| t.ty.def.bounding_box.map(|bb| (t.position, t.heading, bb))).take(3).collect();
                 lighting.detail = self.settings.detail_textures;
+                lighting.windy_trees = self.settings.windy_trees();
                 lighting.glass_wind = self.player.as_ref().map(|p| crate::lights::vehicle_velocity(&p.vehicle)).unwrap_or_default();
+                lighting.condensation = self.cabin_air.appearance();
                 // an LED panel's dots burn this much above their own colour (16 levels,
                 // see `Settings::led_glow`); the panel's picture and its mask are held at
                 // this mip level at most (`Settings::led_mips`)

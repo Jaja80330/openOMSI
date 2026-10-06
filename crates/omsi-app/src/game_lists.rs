@@ -1056,6 +1056,7 @@ fn steps_of(verb: &str) -> Option<Vec<f32>> {
         "mouse_sens" => (10..=300).map(|v| v as f32 / 100.0).collect(),
         "look_sens" => (2..=40).map(|v| v as f32 * 0.05).collect(),
         "look_smoothing_ms" => (0..=20).map(|v| v as f32 * 10.0).collect(),
+        "pad_steer_smooth" => (0..=30).map(|v| v as f32 * 10.0).collect(),
         "seat" => (-50..=50).map(|v| v as f32 / 100.0).collect(),
         "seat_pitch" => (-45..=45).map(|v| v as f32).collect(),
         "hour" => (0..24).map(|v| v as f32).collect(),
@@ -1183,6 +1184,7 @@ fn option_now(app: &App, verb: &str, arg: &str) -> Option<f32> {
         "mouse_sens" => s.mouse_sens,
         "look_sens" => s.look_sens,
         "look_smoothing_ms" => s.look_smoothing_ms,
+        "pad_steer_smooth" => s.pad_steer_smooth,
         "ui_scale" => s.ui_scale,
         "chat_size" => s.chat_size,
         "ui_opacity" => s.ui_opacity,
@@ -1275,6 +1277,10 @@ fn option_set(app: &mut App, verb: &str, arg: &str, v: f32) -> Option<(&'static 
         "look_sens" => {
             app.settings.look_sens = (v * 100.0).round() / 100.0;
             Some(("look_sens", app.settings.look_sens.to_string()))
+        }
+        "pad_steer_smooth" => {
+            app.settings.pad_steer_smooth = v.clamp(0.0, 300.0).round();
+            Some(("pad_steer_smooth", app.settings.pad_steer_smooth.to_string()))
         }
         "look_smoothing_ms" => {
             app.settings.look_smoothing_ms = v.round();
@@ -1465,6 +1471,7 @@ fn toggle_now(app: &App, id: &str) -> Option<bool> {
         "detail_textures" => s.detail_textures,
         "reflections" => s.reflections,
         "clouds" => s.clouds,
+        "windy_trees" => s.windy_trees,
         "fullscreen" => s.fullscreen,
         "vsync" => s.vsync,
         "texture_compression" => s.texture_compression,
@@ -1660,6 +1667,10 @@ fn toggle_set(app: &mut App, id: &str, on: bool) -> Option<(&'static str, String
         "clouds" => {
             app.settings.clouds = on;
             Some(("clouds", bit))
+        }
+        "windy_trees" => {
+            app.settings.windy_trees = on;
+            Some(("windy_trees", bit))
         }
         "fullscreen" => {
             app.settings.fullscreen = on;
@@ -2184,6 +2195,7 @@ fn options_pages(app: &App) -> Vec<Page> {
         slider_row(app, "led_mips", "LED mask mipmaps", "Keep the mip chain of the LED masks (smoother from a distance).", &|v| format!("{v:.2}")),
         switch_row(app, "reflections", "Reflection maps (paint, chrome, glass)", later).filter(|_| !app.settings.ray_tracing()),
         switch_row(app, "clouds", "Clouds", later),
+        switch_row(app, "windy_trees", "Windy trees", "The trees' leaves bend and sway in the wind and its gusts; with no wind they stand still"),
     ]
         .into_iter()
         .flatten()

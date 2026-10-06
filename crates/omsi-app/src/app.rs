@@ -52,6 +52,8 @@ pub(crate) struct App {
     pub(crate) ui: Option<ui::Ui>,
     pub(crate) fps: f32,
     pub(crate) rain: rain::Rain,
+    /// The player's bus's cabin air and the condensation on its glass.
+    pub(crate) cabin_air: crate::condensation::CabinAir,
     /// What the tyres throw up from the water on the roads (see `puddles`).
     pub(crate) spray: puddles::Spray,
     pub(crate) lamps_on: Option<bool>,
@@ -167,6 +169,8 @@ pub(crate) struct App {
     pub(crate) clock_hold: f32,
     /// A controller button held for looking left, right, up, down (`view_look_*`).
     pub(crate) pad_look: [bool; 4],
+    /// A controller button held for the multiplayer bus radio (`voice_radio`).
+    pub(crate) pad_voice_radio: bool,
     /// The arrow keys turned the head (a glance that comes back when they are let go).
     pub(crate) arrow_glance: bool,
     /// The next click on the city map puts the bus there (Esc → Move the bus on the map).
@@ -214,6 +218,10 @@ pub(crate) struct App {
     pub(crate) mouse_pedals: (f32, f32),
     /// The speed mouse steering divides by, smoothed.
     pub(crate) mouse_kmh: f32,
+    /// The speed a gamepad stick's steering divides by, smoothed (as `mouse_kmh`).
+    pub(crate) pad_kmh: f32,
+    /// Where a gamepad stick turns the wheel to, smoothed (`pad_steer_smooth`).
+    pub(crate) pad_steer_target: f32,
     /// The tutorial being run (`--tutorial`), loaded on the first frame.
     pub(crate) tutorial: Option<crate::tutorial::Tutorial>,
     /// OMSI's pedestrian ("ego") view: the free camera walking at eye height on whatever

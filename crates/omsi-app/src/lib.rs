@@ -21,6 +21,8 @@ mod headtrack;
 mod openxr;
 #[cfg(target_os = "macos")]
 mod mac_hid;
+#[cfg(target_os = "macos")]
+mod mac_game_controller;
 #[cfg(target_os = "android")]
 mod android;
 mod platform;
@@ -57,6 +59,7 @@ mod radio;
 
 mod puddles;
 mod quit;
+mod condensation;
 mod rain;
 mod scene;
 mod schedule;
@@ -471,6 +474,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         ui: ui::Ui::new(),
         fps: 0.0,
         rain: rain::Rain::new(),
+        cabin_air: crate::condensation::CabinAir::new(),
         spray: puddles::Spray::new(),
         lamps_on: None,
         menu: None,
@@ -527,6 +531,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         plugin_events: Vec::new(),
         clock_hold: 0.0,
         pad_look: [false; 4],
+        pad_voice_radio: false,
         arrow_glance: false,
         teleport_pick: false,
         discord: None,
@@ -547,6 +552,8 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         last_ctl_steer: None,
         mouse_pedals: (0.0, 0.0),
         mouse_kmh: 0.0,
+        pad_kmh: 0.0,
+        pad_steer_target: 0.0,
         tutorial: None,
         ego: false,
         on_foot: None,

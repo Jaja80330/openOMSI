@@ -3554,6 +3554,40 @@ pub fn ibis_stop_index(hof: &omsi_vehicle::Hof, route: usize, name: &str, k: usi
         .min_by_key(|i| i.abs_diff(k))
 }
 
+/// Route index the unit's stop list uses: stock `IBIS_RouteIndex`, or Aachen's `ibox_routenindex`.
+fn script_route_index(bus: &omsi_sim::VehicleInstance) -> Option<usize> {
+    bus.var("IBIS_RouteIndex")
+        .or_else(|| bus.var("ibox_routenindex"))
+        .filter(|r| *r >= 0.0)
+        .map(|r| r.round() as usize)
+}
+
+/// Align `ibox_busstop` with timetable stop `tt` (named `name`).
+///
+/// (Not `IBIS_busstop`: no stock script reads the timetable's stop index, the stock IBIS
+/// steps on its own keys only - set to the row before, every stock IBIS on a duty ran a
+/// stop behind.) Units such as Aachen's ibox do `(L.L.ibox_busstop) 1 +` when `GetTTBusstopIndex` changes,
+/// so on a forward step the value is left at the previous route index and that `+ 1` lands
+/// on the new one. A backward step (or a resume) writes the index itself and freezes the
+/// ibox's "last TT index" so the frame does not announce again.
+fn sync_script_busstop(bus: &mut omsi_sim::VehicleInstance, tt: usize, name: &str, prev_tt: i32) {
+    let Some(hof) = bus.host.hof.clone() else { return };
+    let Some(route) = script_route_index(bus) else { return };
+    let Some(idx) = ibis_stop_index(&hof, route, name, tt) else { return };
+    let forward = (tt as i32) > prev_tt;
+    let value = if forward { idx.saturating_sub(1) } else { idx };
+    for var in ["ibox_busstop"] {
+        if bus.var(var).is_some() {
+            bus.set_var(var, value as f32);
+        }
+    }
+    if !forward {
+        if bus.var("ibox_TTBusstopIndexLAST").is_some() {
+            bus.set_var("ibox_TTBusstopIndexLAST", tt as f32);
+        }
+    }
+}
+
 /// The player's tour: its trips with planned stop times, and the progress along them.
 pub struct PlayerDuty {
     pub line: String,
@@ -4481,7 +4515,12 @@ impl PlayerDuty {
             );
             return;
         }
+        // The first stop's tile may still be unloaded while a later stop already has a
+        // place: snapping `near` to that later stop made GetTTBusstopIndex (Aachen ibox
+        // Fahrplan list) start on stop #2. Keep the first stop until its place is known.
+        let first_unknown = trip.stops.first().is_some_and(|s| s.position.is_none());
         self.next_stop = match near {
+            Some((k, _)) if first_unknown && k > 0 => 0,
             Some((k, _)) => k,
             // a trip the player picked is driven from its first stop, late as it may be
             None if self.picked => self.next_stop,
@@ -4493,7 +4532,9 @@ impl PlayerDuty {
         };
         // standing at a stop of it, the bus is on its way (as if it had left the stop before
         // on time); elsewhere the duty goes on with the next trip when that is due
-        self.left_late = near.map(|_| 0.0);
+        self.left_late = near
+            .filter(|&(k, _)| !(first_unknown && k > 0))
+            .map(|_| 0.0);
         log::info!(
             "duty: the bus starts {} trip {} ({}) under way, next stop {} '{}'",
             if near.is_some() {
@@ -4753,17 +4794,30 @@ impl PlayerDuty {
     fn feed_host(&self, bus: &mut omsi_sim::VehicleInstance, day_time: f64) {
         let delay = self.delay(day_time);
         let trip = &self.trips[self.trip_index];
-        let host = &mut bus.host;
-        host.tt_line = trip.line.clone();
-        host.tt_stops = trip
-            .stops
-            .iter()
-            .map(|s| (s.name.clone(), s.arr as f32, s.dep as f32))
-            .collect();
-        host.tt_stop_ids = trip.stops.iter().map(|s| s.object_id).collect();
-        host.tt_busstop_index = self.next_stop as i32;
-        host.tt_terminus_index = tt_terminus_index(host.hof.as_deref(), &trip.terminus);
-        host.tt_delay = delay as f32;
+        let prev_tt = bus.host.tt_busstop_index;
+        let stop_name = trip.stops.get(self.next_stop).map(|s| s.name.clone());
+        {
+            let host = &mut bus.host;
+            host.tt_line = trip.line.clone();
+            host.tt_stops = trip
+                .stops
+                .iter()
+                .map(|s| (s.name.clone(), s.arr as f32, s.dep as f32))
+                .collect();
+            host.tt_stop_ids = trip.stops.iter().map(|s| s.object_id).collect();
+            host.tt_busstop_index = self.next_stop as i32;
+            host.tt_terminus_index = tt_terminus_index(host.hof.as_deref(), &trip.terminus);
+            host.tt_delay = delay as f32;
+        }
+        // Aachen's ibox keeps its own stop counter and does `+ 1` when
+        // `GetTTBusstopIndex` changes. A jump of more than one stop, or a unit that only
+        // has `ibox_busstop`, left that counter behind the timetable - the announcement
+        // used the new TT name while the list still showed the old `ibox_busstop` row.
+        if self.next_stop as i32 != prev_tt {
+            if let Some(name) = stop_name.as_deref() {
+                sync_script_busstop(bus, self.next_stop, name, prev_tt);
+            }
+        }
     }
 
     /// The bus came to a later stop of the trip than the one it is due at (it drove past
@@ -5542,6 +5596,116 @@ pub(crate) mod tests {
             first_update: None,
             heading: 90.0,
         }
+    }
+
+    /// Aachen's ibox only has `ibox_busstop` and does `+ 1` when the TT index changes. A
+    /// jump of several stops must pre-position that counter so the `+ 1` lands on the new
+    /// stop - otherwise the list stays behind the announcement.
+    #[test]
+    fn ibox_busstop_is_prepositioned_when_the_timetable_jumps() {
+        let stops = ["Elsternplatz", "Bhf. Nordspitze", "Nordsp. Bauernhof"];
+        let mut hof = omsi_vehicle::Hof::default();
+        for s in stops {
+            hof.bus_stops.push(omsi_vehicle::hof::BusStop {
+                ident: s.into(),
+                strings: vec![s.into(), s.into(), s.into(), s.into()],
+            });
+        }
+        hof.info_busstop_lists.push(stops.iter().map(|s| s.to_string()).collect());
+        let mut bus = script_test_vehicle(
+            "{frame}\n{end}\n",
+            "ibox_busstop\nibox_routenindex\nibox_TTBusstopIndexLAST\n",
+            "",
+        );
+        bus.host.hof = Some(std::sync::Arc::new(hof));
+        bus.set_var("ibox_routenindex", 0.0);
+        bus.set_var("ibox_busstop", 0.0);
+        bus.host.tt_busstop_index = 0;
+        let planned_stops: Vec<PlannedStop> = stops
+            .iter()
+            .enumerate()
+            .map(|(i, name)| PlannedStop {
+                object_id: i as i64,
+                name: (*name).into(),
+                arr: i as f64 * 60.0,
+                dep: i as f64 * 60.0,
+                position: Some(glam::DVec3::new(i as f64 * 100.0, 0.0, 0.0)),
+                dir: StopDir::default(),
+                stops: true,
+            })
+            .collect();
+        let mut duty = PlayerDuty {
+            line: "76".into(),
+            tour: "2".into(),
+            trips: vec![PlannedTrip {
+                name: "76_2".into(),
+                line: "76".into(),
+                terminus: "Nordsp. Bauernhof".into(),
+                departure: 0.0,
+                end: planned_stops.last().unwrap().arr,
+                stops: planned_stops,
+            }],
+            trip_index: 0,
+            first_trip: 0,
+            next_stop: 0,
+            at_stop: false,
+            arrived_late: None,
+            done: false,
+            served_terminus: None,
+            left_late: None,
+            held_back: false,
+            placed: true,
+            trip_changed: false,
+            skipped: None,
+            picked: true,
+            first_update: None,
+            heading: 90.0,
+        };
+        // jump from the first stop to the last: the script will +1 once, so leave 1 behind
+        duty.next_stop = 2;
+        duty.feed_host(&mut bus, 0.0);
+        assert_eq!(bus.host.tt_busstop_index, 2);
+        assert_eq!(bus.var("ibox_busstop"), Some(1.0), "pre-position for the script's +1");
+        // after the unit's own +1 the list and the announcement both show stop 2
+        bus.set_var("ibox_busstop", bus.var("ibox_busstop").unwrap() + 1.0);
+        assert_eq!(bus.var("ibox_busstop"), Some(2.0));
+    }
+
+    /// Aachen's Fahrplan list uses `GetTTBusstopIndex` as the highlighted (bottom) stop. At
+    /// the start of the line that must be 0. If only a later stop's place is loaded yet,
+    /// placing must not jump the index to that later stop.
+    #[test]
+    fn duty_place_keeps_first_stop_while_its_place_is_unknown() {
+        let mut trip = planned(100.0, &[(0.0, 100.0, 100.0), (20.0, 200.0, 200.0), (40.0, 300.0, 300.0)]);
+        trip.stops[0].position = None;
+        let mut d = PlayerDuty {
+            line: "33".into(),
+            tour: "1".into(),
+            trips: vec![trip],
+            trip_index: 0,
+            first_trip: 0,
+            next_stop: 0,
+            at_stop: false,
+            arrived_late: None,
+            done: false,
+            served_terminus: None,
+            left_late: None,
+            held_back: false,
+            placed: true,
+            trip_changed: false,
+            skipped: None,
+            picked: true,
+            first_update: None,
+            heading: 90.0,
+        };
+        // late for the trip, standing at stop 2 whose place is known
+        d.place(glam::DVec3::new(20.0, 0.0, 0.0), 250.0);
+        assert_eq!(d.next_stop, 0, "do not highlight stop #2 while stop #1 has no place");
+        assert!(d.left_late.is_none());
+        let mut bus = timetable_test_vehicle();
+        d.feed_host(&mut bus, 250.0);
+        assert_eq!(bus.host.tt_busstop_index, 0);
+        assert_eq!(bus.host.tt_stops[0].0, "s0");
     }
 
     #[test]

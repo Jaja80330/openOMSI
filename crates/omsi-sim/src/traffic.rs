@@ -263,13 +263,25 @@ impl LaneBuilder {
     /// Sample an arc/straight lane: start position, heading (deg), length, radius (0 = straight,
     /// > 0 right turn), height change over the length.
     pub fn arc(start: DVec3, heading_deg: f64, length: f64, radius: f64, dz: f64, kind: LaneKind, width: f32) -> Lane {
+        Self::sample_arc(start, heading_deg, length, radius, kind, width, |s| dz * s / length.max(1e-6))
+    }
+
+    /// Object-path gradients are rise per metre, not a total height change. Integrate
+    /// the gradient between the ends so the lane meets the next path on a slope.
+    pub fn arc_with_gradients(start: DVec3, heading_deg: f64, length: f64, radius: f64, grad_start: f64, grad_end: f64, kind: LaneKind, width: f32) -> Lane {
+        Self::sample_arc(start, heading_deg, length, radius, kind, width, |s| {
+            grad_start * s + (grad_end - grad_start) * s * s / (2.0 * length.max(1e-6))
+        })
+    }
+
+    fn sample_arc(start: DVec3, heading_deg: f64, length: f64, radius: f64, kind: LaneKind, width: f32, height: impl Fn(f64) -> f64) -> Lane {
         let n = ((length / 2.0).ceil() as usize).clamp(1, 400);
         let mut points = Vec::with_capacity(n + 1);
         let mut headings = Vec::with_capacity(n + 1);
         for i in 0..=n {
             let s = length * i as f64 / n as f64;
             let (p, h) = arc_point(start, heading_deg, s, radius);
-            points.push(DVec3::new(p.x, p.y, start.z + dz * s / length.max(1e-6)));
+            points.push(DVec3::new(p.x, p.y, start.z + height(s)));
             headings.push(h as f32);
         }
         let k = if radius.abs() < 1e-6 { 0.0 } else { (1.0 / radius) as f32 };
@@ -2603,6 +2615,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn arc_height_change_and_object_gradients_have_distinct_units() {
+        let start = DVec3::new(3.0, 4.0, 5.0);
+        let linear = LaneBuilder::arc(start, 20.0, 20.0, 30.0, 0.2, LaneKind::Street, 3.0);
+        assert!((linear.points[5].z - 5.1).abs() < 1e-12);
+        assert!((linear.end().z - 5.2).abs() < 1e-12);
+        let graded = LaneBuilder::arc_with_gradients(start, 20.0, 20.0, 30.0, 0.06, -0.04, LaneKind::Street, 3.0);
+        assert!((graded.points[5].z - 5.35).abs() < 1e-12);
+        assert!((graded.end().z - 5.2).abs() < 1e-12);
+        assert_eq!(linear.headings, graded.headings);
+        assert_eq!(linear.curvature, graded.curvature);
+        for (a, b) in linear.points.iter().zip(&graded.points) {
+            assert_eq!(a.truncate(), b.truncate());
+        }
+    }
 
     /// A straight lane of 60 m running north, then a right-hand bend of radius 14 m over
     /// 60°, then straight on again.

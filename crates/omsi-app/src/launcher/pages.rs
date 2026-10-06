@@ -585,6 +585,7 @@ fn graphics_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, cols: [Rect; 2]) ->
         toggle_setting(ui, s, dirty, c.row(), "Reflection maps (paint, chrome, glass)", "reflections");
     }
     toggle_setting(ui, s, dirty, c.row(), "Clouds", "clouds");
+    toggle_setting(ui, s, dirty, c.row(), "Windy trees", "windy_trees");
     let left = c.used();
     let mut c = Col::new(ui, cols[1], "Display");
     toggle_setting(ui, s, dirty, c.row(), "Fullscreen", "fullscreen");
@@ -657,6 +658,12 @@ fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
     let mut lock = get(s, "wheel_lock").as_f64().unwrap_or(0.0) as f32;
     if ui.slider("s-wlock", c.row(), &mut lock, 0.0, 1800.0, 30.0, "Full lock at", &|v| if v < 45.0 { "OMSI".to_string() } else { format!("{v:.0}°") }) {
         s["wheel_lock"] = json!(if lock < 45.0 { 0.0 } else { lock.round() });
+        *dirty = 0.3;
+    }
+    // a gamepad stick's steering, eased onto where the stick points (0: as it reads)
+    let mut pad_smooth = get(s, "pad_steer_smooth").as_f64().unwrap_or(120.0) as f32;
+    if ui.slider("s-pad-steer-smooth", c.row(), &mut pad_smooth, 0.0, 300.0, 10.0, "Stick steering smoothing", &|v| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} ms") }) {
+        s["pad_steer_smooth"] = json!(pad_smooth.round());
         *dirty = 0.3;
     }
     // the pedals' response: softer (below 1) or stronger (above 1) than the pedal reads
@@ -1151,10 +1158,10 @@ fn mb(v: i64) -> String {
 // --- controls ---------------------------------------------------------------------------------
 
 /// The game's own actions a controller's button can be given, besides the bus's: the doors
-/// and gears of any bus, looking round while held, the cameras and the views - both of
-/// OMSI's view resets, the one view's (C) and every view's (Space), which a controller
-/// could not bring back to the first camera (#1167).
-const PAD_GAME_ACTIONS: [&str; 25] = ["doors_all", "door_4", "door_3", "door_2", "door_1", "gear_up", "gear_down", "view_look_left", "view_look_right", "view_look_up", "view_look_down", "view_reset_direction", "view_reset_all_directions", "view_interiorcam_plus", "view_interiorcam_minus", "view_toggle_viewpoint", "view_toggle_interior", "view_set_driver", "view_set_passenger", "view_set_outside", "sim_pause", "screenshot", "quicksave", "toggel_mouse_ctrl", "toggel_ctrler"];
+/// and gears of any bus, looking round while held, the bus radio while held, the cameras
+/// and the views - both of OMSI's view resets, the one view's (C) and every view's (Space),
+/// which a controller could not bring back to the first camera (#1167).
+const PAD_GAME_ACTIONS: [&str; 26] = ["doors_all", "door_4", "door_3", "door_2", "door_1", "gear_up", "gear_down", "view_look_left", "view_look_right", "view_look_up", "view_look_down", "view_reset_direction", "view_reset_all_directions", "view_interiorcam_plus", "view_interiorcam_minus", "view_toggle_viewpoint", "view_toggle_interior", "view_set_driver", "view_set_passenger", "view_set_outside", "sim_pause", "screenshot", "quicksave", "toggel_mouse_ctrl", "toggel_ctrler", "voice_radio"];
 
 fn action_text(names: &crate::describe::ControlNames, a: &str) -> String {
     known_action(a).unwrap_or_else(|| names.control(a))
@@ -1217,6 +1224,7 @@ fn known_action(a: &str) -> Option<String> {
         ("exit", "Quit"),
         ("chat_open", "Multiplayer: write in the chat"),
         ("chat_toggle", "Multiplayer: show / hide the chat"),
+        ("voice_radio", "Multiplayer: bus radio (hold)"),
         ("radio_ptt", "Dispatch radio: push to talk"),
         ("sim_pause", "Pause"),
         ("screenshot", "Screenshot"),
@@ -1583,7 +1591,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
     l.ui.panel(right);
     let Some(d) = devices.get_mut(pv.selected) else { return };
     let inner = l.ui.heading(Rect::new(right.x + 18.0, right.y + 14.0, right.w - 36.0, right.h - 28.0), &d.name.clone(), Some("tune"));
-    let live_dev = connected.iter().find(|c| crate::controllers::names_match(&d.name, &c.name));
+    let live_dev = crate::controllers::find_connected(&connected, &d.name);
     let live: Vec<(usize, f32)> = live_dev.map(|c| c.axes.clone()).unwrap_or_default();
     // every button the device has gets its line (DirectInput says how many)
     if let Some(n) = live_dev.map(|c| c.buttons).filter(|n| *n > d.buttons.len()) {
@@ -2654,7 +2662,7 @@ mod settings_tests {
     fn by_tab() -> Vec<Vec<&'static str>> {
         let mut graphics = vec![
             "s-gp-sel", "s-gp-load", "s-gp-del", "s-gp-name", "s-gp-save",
-            "s-preset", "s-graphics", "s-msaa", "s-scale", "s-af", "s-shadow", "set-ssao", "set-shadows", "s-casters", "set-detail_textures", "s-led", "s-led-mip", "set-shadow_blobs", "set-reflections", "set-clouds",
+            "s-preset", "s-graphics", "s-msaa", "s-scale", "s-af", "s-shadow", "set-ssao", "set-shadows", "s-casters", "set-detail_textures", "s-led", "s-led-mip", "set-shadow_blobs", "set-reflections", "set-clouds", "set-windy_trees",
             "set-fullscreen", "s-res", "set-vsync", "s-fps", "s-view", "s-maxobj", "s-minobj", "s-mirror", "s-mirror-refresh", "s-texmem", "set-texture_compression",
         ];
         if !cfg!(target_os = "macos") {
@@ -2662,7 +2670,7 @@ mod settings_tests {
         }
         let driving = vec![
             "s-keys", "set-steering_linear", "set-old_steering", "set-red_steer_spd", "s-mouse", "set-mouse_smooth", "set-mouse_right_off", "set-blinker_cancel", "set-brake_hold", "set-auto_clutch", "set-momentary_gears", "s-go-keys",
-            "s-wrange", "s-wlock", "s-pedt", "s-pedb", "set-ff_enabled", "set-ff_invert", "s-ffroad", "s-ffeng", "s-fffade", "s-wreset", "s-go-pads",
+            "s-wrange", "s-wlock", "s-pad-steer-smooth", "s-pedt", "s-pedb", "set-ff_enabled", "set-ff_invert", "s-ffroad", "s-ffeng", "s-fffade", "s-wreset", "s-go-pads",
         ];
         let mut camera = vec![
             "s-seaty",
@@ -2824,16 +2832,25 @@ mod settings_tests {
 #[cfg(test)]
 mod pad_action_tests {
     /// Every game action a button can be given is one the game carries out from a
-    /// controller (app_events: `view_look_*` and the gears by name, the rest through
-    /// `is_game_action`, the doors through `Player::action`) - Space's reset of every view
-    /// among them (#1167).
+    /// controller (app_events: `view_look_*` / `voice_radio` while held, the gears by name,
+    /// the rest through `is_game_action`, the doors through `Player::action`) - Space's
+    /// reset of every view among them (#1167).
     #[test]
     fn a_button_can_reset_every_view() {
         assert!(super::PAD_GAME_ACTIONS.contains(&"view_reset_all_directions"));
+        assert!(super::PAD_GAME_ACTIONS.contains(&"voice_radio"));
+        assert_eq!(super::known_action("voice_radio").as_deref(), Some("Multiplayer: bus radio (hold)"));
         for a in super::PAD_GAME_ACTIONS {
-            let handled = crate::input_script::is_game_action(a) || a.starts_with("gear_") || crate::player::door_action(a).is_some();
+            let held = a.starts_with("view_look_") || a == "voice_radio";
+            let handled = held
+                || crate::input_script::is_game_action(a)
+                || a.starts_with("gear_")
+                || crate::player::door_action(a).is_some();
             assert!(handled, "{a}");
         }
+        // held pad actions are game actions so they never reach the bus script
+        assert!(crate::input_script::is_game_action("voice_radio"));
+        assert!(crate::input_script::is_game_action("view_look_left"));
     }
 }
 

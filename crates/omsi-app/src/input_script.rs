@@ -9,7 +9,12 @@ pub(crate) fn is_game_action(name: &str) -> bool {
     name.starts_with("view_")
         || matches!(
             name.as_str(),
-            "sim_pause" | "screenshot" | "quicksave" | "toggel_mouse_ctrl" | "toggel_ctrler"
+            "sim_pause"
+                | "screenshot"
+                | "quicksave"
+                | "toggel_mouse_ctrl"
+                | "toggel_ctrler"
+                | "voice_radio"
         )
 }
 
@@ -639,6 +644,7 @@ impl App {
     /// vehicle for each of them.
     pub(crate) fn tick_lan(&mut self, dt: f32) {
         let walker = self.walker_pose();
+        let radio_keyed = self.voice_radio_held();
         let Some(lan) = self.lan.as_mut() else {
             // (the session is over: the plugin is told so)
             self.voice = None;
@@ -658,6 +664,7 @@ impl App {
             tour: self.duty.as_ref().map(|d| format!("{}/{}", d.line, d.tour)),
             walker,
             inside_of: self.inside_remote,
+            radio_keyed,
         };
         let updates = lan::tick(
             lan,
@@ -775,11 +782,40 @@ impl App {
         let my_bus = self.player.as_ref().map(|p| p.vehicle.position);
         let others = crate::voice::speakers(lan, &self.remotes, my_bus);
         let inside = if self.in_cab { Some(lan.my_id) } else { self.inside_remote };
-        let listener = self.camera.as_ref().map(|c| crate::voice::Listener { at: c.position, yaw: c.yaw, inside });
+        // driving a bus (not on foot): on the company radio automatically
+        let on_radio = self.player.is_some() && !self.ego;
+        let radio_keyed = on_radio && self.voice_radio_held();
+        let listener = self.camera.as_ref().map(|c| crate::voice::Listener {
+            at: c.position,
+            yaw: c.yaw,
+            inside,
+            on_radio,
+            radio_keyed,
+        });
         let me = (lan.my_name.clone(), lan.my_id);
         if let Some(v) = self.voice.as_mut() {
             v.tick(dt, (&me.0, me.1), listener, &others);
         }
+    }
+
+    /// Is the bindable bus radio key (`voice_radio` in Controls) held right now?
+    /// Keyboard chord or a controller button bound to the same action (held while down).
+    fn voice_radio_held(&self) -> bool {
+        if self.pad_voice_radio {
+            return true;
+        }
+        let held = |a: KeyCode, b: KeyCode| self.keys.contains(&a) || self.keys.contains(&b);
+        let chord = omsi_content::input::chord(
+            held(KeyCode::ShiftLeft, KeyCode::ShiftRight),
+            held(KeyCode::ControlLeft, KeyCode::ControlRight),
+            held(KeyCode::AltLeft, KeyCode::AltRight),
+        );
+        self.game_keys.iter().any(|b| {
+            b.action.eq_ignore_ascii_case("voice_radio")
+                && b.scan_code != 0
+                && b.matches(chord)
+                && self.keys.iter().any(|k| crate::keys::dik_code(*k) == Some(b.scan_code))
+        })
     }
 
     /// The host's world as LAN play asks for it: its clock (set or caught up with) and its
@@ -1464,6 +1500,10 @@ impl App {
     /// from the last two positions, and fired only on movement it kept the speed of the last
     /// small move through a pause and swung shut when let go; the door scripts set their
     /// push once per trigger.
+    ///
+    /// The redraw path may inline this after `Player::tick` (field borrow of `player`); keep
+    /// the helper for any call site that does not already hold `self.player`.
+    #[allow(dead_code)] // inlined in `app_events` redraw while `player` is borrowed
     pub(crate) fn drag_frame(&mut self) {
         if !self.dragging {
             return;

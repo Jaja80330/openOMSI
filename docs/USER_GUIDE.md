@@ -283,7 +283,11 @@ the panel's own light, and the glow draws a halo around them), `led_mips` (0..4,
 `\S:n` mask are sampled at the level their screen footprint asks for, never coarser than
 this. 0 point-samples them, the sharpest dots and the worst shimmer; 1.3 keeps a matrix's
 dots a couple of pixels across where the full chain has run them together; 4 is near the
-calm of the full chain), `mouse_sens` (mouse steering,
+calm of the full chain). Cockpit screens in Enhanced (IBIS/ibox boards with o3d emissive, ticket/html terminals,
+dashboard LCDs and cab indicator night maps) keep full daytime look and only dim as night
+deepens so white UI greys stay readable without bleaching; destination LED matrices still
+follow `led_glow` only. For tuning, `OMSI_SELF_LIT_NIGHT=day,night` sets the day and night
+ends of that scale (defaults `1,0.32`). `mouse_sens` (mouse steering,
 1 = OMSI's), `mouse_smooth` (0: the mouse's wheel follows the cursor without easing),
 `ui_scale` (the size of the game's interface over the picture - its texts,
 the menu, the timetable, the navigator and the city map - from 0.5 to 2, 1 by default, on

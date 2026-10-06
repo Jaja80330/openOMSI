@@ -643,6 +643,8 @@ pub struct Frame<'a> {
     pub walker: Option<omsi_net::Walker>,
     /// We stand or sit in this player's bus: it is drawn from inside.
     pub inside_of: Option<u32>,
+    /// We are holding the bus radio key (map-wide GreenTeaSpeak voice).
+    pub radio_keyed: bool,
 }
 
 pub(crate) fn data_dir() -> Option<PathBuf> {
@@ -1694,7 +1696,8 @@ fn nav_player(pose: &Pose, name: &str, bus: (DVec3, f64), my_id: u32, bus_of: im
 /// small line under it (line and destination, how far away), fading out beyond 300 m.
 /// Screen positions in physical pixels of a `width` x `height` picture (on a triple-screen
 /// rig, of the three panels side by side). `speaks` tells who talks in the voice chat now (by
-/// name and id): "speaking" under their name.
+/// name and id): "speaking" under their name. `on_radio` who keys the bus radio: "radio"
+/// instead, and the tag stays visible across the map.
 pub fn name_tags(
     game: &LanGame,
     cam: &omsi_render::Camera,
@@ -1702,6 +1705,7 @@ pub fn name_tags(
     height: f32,
     rig: Option<&omsi_render::TripleScreen>,
     speaks: &dyn Fn(&str, u32) -> bool,
+    on_radio: &dyn Fn(&str, u32) -> bool,
 ) -> Vec<((f32, f32), String, String, f32)> {
     let views: Vec<_> = if let Some(rig) = rig {
         rig.views(cam, width as u32, height as u32)
@@ -1730,7 +1734,9 @@ pub fn name_tags(
             None => v.position + DVec3::new(0.0, 0.0, top + 0.6),
         };
         let d = (p - cam.position).length();
-        if d > 450.0 {
+        let radio = on_radio(&r.name, r.last.id) || r.last.radio_keyed;
+        // (a radio key across the map: the tag still shows who is transmitting)
+        if d > 450.0 && !radio {
             continue;
         }
         let Some((screen_x, y)) = views.iter().find_map(|(vp, offset, panel_width)| {
@@ -1761,10 +1767,12 @@ pub fn name_tags(
             let dist = if d >= 1000.0 { format!("{:.1} km", d / 1000.0) } else { format!("{:.0} m", d) };
             sub = if sub.is_empty() { dist } else { format!("{sub} · {dist}") };
         }
-        if speaks(&r.name, r.last.id) {
+        if radio {
+            sub = if sub.is_empty() { omsi_ui::tr("radio").into_owned() } else { format!("{} · {sub}", omsi_ui::tr("radio")) };
+        } else if speaks(&r.name, r.last.id) {
             sub = if sub.is_empty() { omsi_ui::tr("speaking").into_owned() } else { format!("{} · {sub}", omsi_ui::tr("speaking")) };
         }
-        let alpha = (1.0 - ((d as f32 - 300.0) / 150.0)).clamp(0.0, 1.0);
+        let alpha = if radio { 1.0 } else { (1.0 - ((d as f32 - 300.0) / 150.0)).clamp(0.0, 1.0) };
         tags.push(((screen_x, (1.0 - y) * 0.5 * height), name, sub, alpha));
     }
     tags
@@ -2009,6 +2017,7 @@ pub fn my_pose(
         values: table.values.iter().map(|(_, id)| get(*id)).collect(),
         walker: None,
         sent_ms: 0,
+        radio_keyed: false,
     }
 }
 
@@ -3176,6 +3185,8 @@ pub fn tick(
     let mut mine = my_pose(game, player.as_deref(), args, duty, frame.riders);
     mine.tour = frame.tour.clone().unwrap_or_default();
     mine.walker = frame.walker;
+    // (only while driving: on foot or as a passenger the radio key does nothing)
+    mine.radio_keyed = frame.radio_keyed && frame.walker.is_none() && mine.has_vehicle();
     if lan.role == Role::Host {
         // the tours the others drive are theirs, not the timetable's
         let tours: hashbrown::HashSet<(String, String)> = lan

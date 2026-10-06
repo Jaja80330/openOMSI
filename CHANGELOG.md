@@ -4,6 +4,43 @@ Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/openOMSI-Project/openOMSI/releases) page.
 
+## 0.2.2 - 2026-10-06
+
+### Bug Fixes & Improvements
+
+## 0.2.1 - 2026-10-06
+
+### Bug Fixes & Improvements
+- Android: a black screen instead of the game since 0.2.0 (#1633, #1597) on phones whose graphics driver cannot compile one of 0.2's new shaders (the snowfall, the lamps in the fog, the street lamps' shadow maps): the driver's error lost the whole graphics device. The game now notices this while it starts, opens the device again without those three and draws as before (snow then falls without flakes). The log names the shaders it was compiling when the device was lost.
+
+## 0.2.0 - 2026-10-06
+
+A release about light and weather: the Enhanced and Enhanced+ pictures worked out from the physics of the eye, the air and the lamps, and a new snowfall for every graphics mode.
+
+### Night (Enhanced, Enhanced+)
+- The night is dark again: the eye's adaptation follows a lightness-perception model (Krawczyk et al. 2005) instead of nearly full adaptation, the automatic metering no longer brightens a night, and the eye adapts to the lamps and headlights actually in view (their log-average) rather than to a fixed city level.
+- Street lamps cast real shadows: shadow maps for the four lamps lighting the camera's surroundings most (the bus, poles, signs and trees throw their shadows on the street).
+- A street lamp's light goes down and out, not into the sky: tree crowns and upper floors above the lamps stay dark.
+- The lit ground throws light back up: a bus's flank or a facade beside a lit street is no longer black; much more so over snow.
+- Moonlit nights: the moon is a directional light with its own shadows; on a dark country road under a full moon the eye takes to the moonlight.
+- The night sky's glow comes from the lamps round the camera (Walker's law): a village keeps its stars, a city glows orange-grey.
+
+### Weather (Enhanced, Enhanced+)
+- Fog and mist light up round every lamp and in front of every headlight (single scattering by the droplets, a forward peak and back-scatter): halos, cones under the lamps, the glow of a bus's own beams in the fog. Rain does not do this (its drops scatter too narrowly), so headlights keep a single glow in a drizzle.
+- Shafts of sunlight between the shadows of houses and trees in haze, mist and fog.
+- Falling snow takes the view as a real snowfall does (heavy snow: some 400 m).
+- Wet porous surfaces (soil, paving, plaster, bark) turn darker and deeper in colour in the rain, not only the asphalt.
+- An overcast deck lets through light by its thickness: a raining nimbostratus is darker, a grey day over snow brighter.
+- Raindrops and snowflakes are lit by what is round them - the sky, the sun, the lamps - instead of glowing at one level in the dark.
+
+### Light and the eye (Enhanced, Enhanced+)
+- Looking at the sun blinds: the eye's scattered light round it (CIE 146 glare function) with a faint ciliary corona and lenticular halo.
+- Eye adaptation: the picture darkens when the sun comes into view and brightens in a dark cab or an underpass, quickly towards the light and slowly towards the dark.
+- Lit windows and lights have a light glow; only what is brighter than the screen's white glows.
+
+### Snowfall (all graphics modes)
+- A new snowfall: up to 150 000 flakes worked out on the graphics card (nothing per flake on the processor), fixed in the world so the bus drives through the snow, falling gently at about a metre a second, swaying and drifting with the wind; a light fall is fewer, smaller crystals. No snow falls inside the player's bus.
+
 ## 0.1.1740 - 2026-10-05
 
 ### Merged pull requests

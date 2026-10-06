@@ -1784,34 +1784,109 @@ fn terrain_ground(src: &MeshData, slots: &[usize], pos: DVec3, xf: Mat4, origin:
 }
 
 /// Two crossed unit quads (1 m wide, 1 m tall, centred at x=0, standing on z=0).
+/// Windy trees: whether a scenery object is a plant whose leaves the wind moves - by its
+/// `[groups]` (the stock "Trees LQ", "Deciduous", "Shrubbery", "Arbors", "Plants" and their
+/// kin in other content), or, for an object filed in no group, by the words of its file's
+/// name - and if so how much it gives to the wind. Not a `[tree]` (its cards have their
+/// own) and not a backdrop (a forest painted on one wide card).
+fn vegetation_give_of(sco: &omsi_scenery::sco::SceneryObject) -> Option<f32> {
+    const GROUP_WORDS: [&str; 18] = ["tree", "baum", "bäume", "baeume", "deciduous", "conifer", "shrub", "bush", "busch", "strauch", "hecke", "hedge", "plant", "pflanz", "arbor", "vegetation", "forest", "wald"];
+    const NAME_WORDS: [&str; 15] = ["tree", "trees", "baum", "shrub", "shrubbery", "bush", "busch", "strauch", "hecke", "hedge", "arbor", "chestnut", "kastanie", "palm", "plant"];
+    if sco.tree.is_some() {
+        return None;
+    }
+    let groups: Vec<String> = sco.groups.iter().map(|g| g.trim().to_lowercase()).filter(|g| !g.is_empty()).collect();
+    if groups.iter().any(|g| g.contains("backdrop")) {
+        return None;
+    }
+    let stem = sco.path.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let plant = if groups.is_empty() {
+        stem.split(|c: char| !c.is_alphabetic()).any(|w| NAME_WORDS.contains(&w))
+    } else {
+        groups.iter().any(|g| GROUP_WORDS.iter().any(|w| g.contains(w)))
+    };
+    plant.then(|| vegetation_give(&[&stem, &groups.join(" ")]))
+}
+
+/// The windy trees' pivot of a plant model's leaf slot (`MaterialExtra::sway`, mesh units):
+/// the crown leaves the trunk where the slot's lowest leaves hang, and at a quarter of the
+/// plant's height at least (a picture of the whole tree on crossed cards, trunk and all,
+/// is one slot); a plant up to 3 m tall - a shrub, a hedge - bends from the ground.
+fn foliage_sway(meshes: &[(MeshData, Vec<omsi_o3d::Material>, Vec<MaterialDef>)], mesh: &MeshData, slot: u32, give: f32) -> Option<[f32; 3]> {
+    let (lo, hi) = meshes
+        .iter()
+        .flat_map(|(m, _, _)| m.positions.iter())
+        .fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)));
+    let leaf_lo = mesh
+        .ranges
+        .iter()
+        .filter(|r| r.2 == slot)
+        .flat_map(|r| mesh.indices.get(r.0 as usize..(r.0 + r.1) as usize).unwrap_or(&[]))
+        .filter_map(|&i| mesh.positions.get(i as usize))
+        .fold(f32::MAX, |lo, p| lo.min(p.z));
+    let height = hi - lo;
+    if !(height > 0.2) || leaf_lo == f32::MAX {
+        return None;
+    }
+    let pivot = if height <= 3.0 { lo } else { leaf_lo.max(lo + 0.25 * height) };
+    (hi - pivot > 0.1).then_some([pivot, hi, if height <= 3.0 { 0.5 * give } else { give }])
+}
+
+/// How much a tree gives to the wind by its kind (windy trees): a conifer's needles and
+/// stiff whorls of branches move less than a broadleaf's crown.
+fn vegetation_give(names: &[&str]) -> f32 {
+    const CONIFER: [&str; 12] = ["fir", "tanne", "fichte", "kiefer", "pine", "spruce", "conifer", "nadel", "cypress", "zypresse", "thuja", "larch"];
+    let conifer = names.iter().any(|n| {
+        let n = n.to_ascii_lowercase();
+        CONIFER.iter().any(|c| n.contains(c))
+    });
+    if conifer { 0.6 } else { 1.0 }
+}
+
+/// The windy trees' pivot of a `[tree]`'s cards (`MaterialExtra::sway`, in the card's units
+/// of its height): the crown leaves the trunk at about a quarter of the picture's height; a
+/// shrub (a type no taller than 3 m) bends from the ground.
+fn tree_card_sway(ot: &ObjectType, texture: &str) -> [f32; 3] {
+    let shrub = ot.sco.tree.as_ref().is_some_and(|t| t.2 > 0.0 && t.2 <= 3.0);
+    let path = ot.sco.path.to_string_lossy();
+    [if shrub { SHRUB_CARD_PIVOT } else { TREE_CARD_PIVOT }, 1.0, vegetation_give(&[texture, &path])]
+}
+
+/// Where a `[tree]` card's crown leaves its trunk, and a shrub's (of the card's height).
+const TREE_CARD_PIVOT: f32 = 0.28;
+const SHRUB_CARD_PIVOT: f32 = 0.03;
+
 fn tree_quad_mesh() -> MeshData {
+    // Each card is a small grid of quads rather than one: a flat grid is the same picture,
+    // and it gives the windy trees (shader.wgsl `tree_sway`) vertices to bend the crown by
+    // while the trunk below the pivot stays where it stands. The rows lie on the pivots
+    // (the bend starts exactly there) and evenly over the crown, enough for its curve; the
+    // bend is the same across the card, so two columns do (the boughs' lobes are a crown
+    // wide). 12 quads a side: every tree of a forest pays for it.
+    const TREE_COLS: u32 = 2;
+    const ROWS: [f32; 7] = [0.0, SHRUB_CARD_PIVOT, TREE_CARD_PIVOT, 0.46, 0.64, 0.82, 1.0];
+    const TREE_ROWS: u32 = ROWS.len() as u32 - 1;
     let mut m = MeshData::default();
     for (dx, dy) in [(0.5f32, 0.0f32), (0.0, 0.5)] {
         let base = m.positions.len() as u32;
-        for (sx, z, u, v) in [
-            (-1.0f32, 0.0f32, 0.0f32, 1.0f32),
-            (1.0, 0.0, 1.0, 1.0),
-            (1.0, 1.0, 1.0, 0.0),
-            (-1.0, 1.0, 0.0, 0.0),
-        ] {
-            m.positions.push(glam::Vec3::new(dx * sx, dy * sx, z));
-            m.normals.push(glam::Vec3::Z);
-            m.uvs.push(glam::Vec2::new(u, v));
+        for r in 0..=TREE_ROWS {
+            for c in 0..=TREE_COLS {
+                let u = c as f32 / TREE_COLS as f32;
+                let z = ROWS[r as usize];
+                let sx = u * 2.0 - 1.0;
+                m.positions.push(glam::Vec3::new(dx * sx, dy * sx, z));
+                m.normals.push(glam::Vec3::Z);
+                m.uvs.push(glam::Vec2::new(u, 1.0 - z));
+            }
         }
-        m.indices.extend_from_slice(&[
-            base,
-            base + 1,
-            base + 2,
-            base,
-            base + 2,
-            base + 3,
-            base,
-            base + 2,
-            base + 1,
-            base,
-            base + 3,
-            base + 2,
-        ]);
+        let at = |c: u32, r: u32| base + r * (TREE_COLS + 1) + c;
+        for r in 0..TREE_ROWS {
+            for c in 0..TREE_COLS {
+                let (a, b, cc, d) = (at(c, r), at(c + 1, r), at(c + 1, r + 1), at(c, r + 1));
+                // both sides
+                m.indices.extend_from_slice(&[a, b, cc, a, cc, d, a, cc, b, a, d, cc]);
+            }
+        }
     }
     m.ranges.push((0, m.indices.len() as u32, 0));
     m
@@ -5251,6 +5326,7 @@ impl World {
                         color: ml.color,
                         intensity: 1.0,
                         core: ml.radius.max(0.5),
+                        housed: true,
                         ..Default::default()
                     });
                 }
@@ -6257,6 +6333,12 @@ impl World {
                 let mut extra = material_extra(&slot_ov, env_mask, bump, specular);
                 extra.ambient = Some(ambient);
                 extra.no_map_lights = ot.sco.no_map_lighting;
+                // windy trees: a plant's leaves (its cut-out or blended slots) bend in the wind
+                if alpha != AlphaMode::Opaque {
+                    if let Some(give) = vegetation_give_of(&ot.sco) {
+                        extra.sway = foliage_sway(&ot.meshes, mesh, slot as u32, give);
+                    }
+                }
                 if tex.is_some() {
                     let dirs_ref: Vec<&Path> = dirs.iter().map(|p| p.as_path()).collect();
                     let c = self.textures.cfg(&m.texture, &dirs_ref);
@@ -7076,6 +7158,7 @@ impl World {
                                 [0.0; 3],
                                 omsi_render::MaterialExtra {
                                     tree: true,
+                                    sway: Some(tree_card_sway(ot, texture)),
                                     ..Default::default()
                                 },
                             );
@@ -8928,10 +9011,14 @@ const OMSI_TILE_DIST: i32 = 1;
 fn stand_in_area(ot: &ObjectType, xf: &Mat4, pos: DVec3, tile: (i32, i32)) -> Option<[f64; 4]> {
     let ts = tile_size();
     let loaded = (2 * OMSI_TILE_DIST + 1) as f64 * ts;
-    let wide = ot.meshes.iter().any(|(m, _, _)| {
-        let b = mesh_bounds(m, xf, pos);
-        (b[2] - b[0]).max(b[3] - b[1]) > 2.0 * loaded
-    });
+    // The footprint belongs to the whole object, regardless of how the exporter
+    // splits it into meshes. Separate parts can each fit below the cutoff while
+    // their combined extent is a distant scenery backdrop.
+    let bounds = ot.meshes.iter()
+        .filter(|(m, _, _)| !m.positions.is_empty())
+        .map(|(m, _, _)| mesh_bounds(m, xf, pos))
+        .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+    let wide = bounds.is_some_and(|b| (b[2] - b[0]).max(b[3] - b[1]) > 2.0 * loaded);
     if !wide {
         return None;
     }
@@ -10359,6 +10446,7 @@ fn material_extra(
         led: false,
         no_map_lights: false,
         tree: false,
+        sway: None,
         moisture: 0.0,
         transmap_declared: ov.iter().any(|o| o.transmap.is_some()),
         // (the last addressing command of the slot decides; the colour is given in bytes)
@@ -12915,7 +13003,7 @@ fn object_lanes(
         if length <= 0.01 {
             continue;
         }
-        let dz = v.get(7).copied().unwrap_or(0.0) as f64;
+        let (grad_start, grad_end) = (v[6] as f64, v[7] as f64);
         let kind = LaneKind::from_code(p.kind);
         let turn = match v.get(11).map(|t| *t as i32) {
             Some(2) => 1,
@@ -12956,7 +13044,7 @@ fn object_lanes(
         // who goes first where this path meets another (`Network::must_yield`)
         let priority = rule_of("priority");
         let mut push = |reverse: bool| {
-            let mut l = LaneBuilder::arc(start, path_heading, length, radius, dz, kind, p.width);
+            let mut l = LaneBuilder::arc_with_gradients(start, path_heading, length, radius, grad_start, grad_end, kind, p.width);
             if reverse {
                 let pts: Vec<DVec3> = l.points.iter().rev().copied().collect();
                 l = LaneBuilder::polyline(pts, kind, p.width);
@@ -13771,6 +13859,10 @@ mod tests {
     }
 
 }
+
+#[cfg(test)]
+#[path = "scene/object_path_tests.rs"]
+mod object_path_tests;
 
 #[cfg(test)]
 #[path = "scene/terrain_mapping_tests.rs"]
