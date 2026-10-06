@@ -1239,9 +1239,9 @@ pub struct Scene {
     /// Overlay textures drawn on their side (their u down the rectangle, v across it): the
     /// mirror panels of a glass whose mesh lays the picture so.
     pub transposed: std::collections::HashSet<TextureId>,
-    /// Per overlay: the texture its bind group was made for, its rect buffer and the group
-    /// (kept between frames; only the rect is rewritten).
-    overlay_res: Vec<(TextureId, wgpu::Buffer, wgpu::BindGroup, [f32; 8])>,
+    /// Per overlay: the texture and generation its bind group was made for, its rect buffer
+    /// and the group (kept between frames; only the rect is rewritten while that texture lives).
+    overlay_res: Vec<(TextureId, u64, wgpu::Buffer, wgpu::BindGroup, [f32; 8])>,
     /// Structural change (render origin moved, buffers too small): everything is rebuilt.
     dirty: bool,
     /// How many instances (and per-draw entries) the buffers hold; instances added since
@@ -8301,7 +8301,7 @@ impl Renderer {
             }
             pass.set_scissor_rect(0, 0, width, height);
             pass.set_pipeline(&self.overlay_pipeline_1x);
-            for (_, _, group, _) in &scene.overlay_res {
+            for (_, _, _, group, _) in &scene.overlay_res {
                 pass.set_bind_group(0, group, &[]);
                 pass.draw(0..6, 0..1);
             }
@@ -8462,6 +8462,7 @@ impl Renderer {
         for (k, (tex, r)) in overlays.iter().copied().enumerate() {
             let r = snap_rect(r);
             let texture = scene.textures.get(tex);
+            let generation = texture.map_or(0, |texture| texture.gen);
             let mut ndc = [
                 r[0] / full_w as f32 * 2.0 - 1.0,
                 1.0 - r[1] / full_h as f32 * 2.0,
@@ -8479,7 +8480,11 @@ impl Renderer {
                 ndc[2] = ndc[0];
                 ndc[3] = ndc[1];
             }
-            if let Some((_, buf, _, last)) = scene.overlay_res.get_mut(k).filter(|o| o.0 == tex) {
+            if let Some((_, _, buf, _, last)) = scene
+                .overlay_res
+                .get_mut(k)
+                .filter(|o| o.0 == tex && o.1 == generation)
+            {
                 if *last != ndc {
                     self.queue.write_buffer(buf, 0, bytemuck::cast_slice(&ndc));
                     *last = ndc;
@@ -8514,9 +8519,9 @@ impl Renderer {
                 ],
             });
             if k < scene.overlay_res.len() {
-                scene.overlay_res[k] = (tex, buf, bg, ndc);
+                scene.overlay_res[k] = (tex, generation, buf, bg, ndc);
             } else {
-                scene.overlay_res.push((tex, buf, bg, ndc));
+                scene.overlay_res.push((tex, generation, buf, bg, ndc));
             }
         }
     }
@@ -10459,7 +10464,7 @@ impl Renderer {
             if !overlays.is_empty() && !masked_frame && !scaled {
                 pass.set_pipeline(&self.overlay_pipeline);
                 for (k, _) in overlays.iter().enumerate() {
-                    if let Some((_, _, bg, _)) = scene.overlay_res.get(k) {
+                    if let Some((_, _, _, bg, _)) = scene.overlay_res.get(k) {
                         pass.set_bind_group(0, bg, &[]);
                         pass.draw(0..6, 0..1);
                     }
@@ -10592,7 +10597,7 @@ impl Renderer {
             if !overlays.is_empty() && !scaled {
                 pass.set_pipeline(&self.overlay_pipeline_1x);
                 for (k, _) in overlays.iter().enumerate() {
-                    if let Some((_, _, bg, _)) = scene.overlay_res.get(k) {
+                    if let Some((_, _, _, bg, _)) = scene.overlay_res.get(k) {
                         pass.set_bind_group(0, bg, &[]);
                         pass.draw(0..6, 0..1);
                     }
@@ -10750,7 +10755,7 @@ impl Renderer {
                 if !overlays.is_empty() && !scaled {
                     pass.set_pipeline(&self.overlay_pipeline_1x);
                     for (k, _) in overlays.iter().enumerate() {
-                        if let Some((_, _, bg, _)) = scene.overlay_res.get(k) {
+                        if let Some((_, _, _, bg, _)) = scene.overlay_res.get(k) {
                             pass.set_bind_group(0, bg, &[]);
                             pass.draw(0..6, 0..1);
                         }
@@ -10789,7 +10794,7 @@ impl Renderer {
             if !overlays.is_empty() {
                 pass.set_pipeline(&self.overlay_pipeline_1x);
                 for (k, _) in overlays.iter().enumerate() {
-                    if let Some((_, _, bg, _)) = scene.overlay_res.get(k) {
+                    if let Some((_, _, _, bg, _)) = scene.overlay_res.get(k) {
                         pass.set_bind_group(0, bg, &[]);
                         pass.draw(0..6, 0..1);
                     }
