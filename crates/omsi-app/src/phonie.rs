@@ -12,9 +12,13 @@
 //!   bus on the server); in the last two only the dispatcher talks. Only the dispatcher
 //!   starts and ends a call - a driver cannot hang up. A call reaches the players who drive a
 //!   bus of their own: one on foot, or riding in another's bus, has no radio.
+//! * Several dispatchers, each at a console of its own: each console has its call (a driver
+//!   is in one call at a time - another console's driver is not taken), hears its own
+//!   drivers and talks to them. A console may listen to every call ("Secours phonie", when
+//!   the dispatch page allows it): it hears every driver and the other dispatchers too.
 //! * Push to talk: a key in the game (`radio_ptt`, the right Ctrl key unless moved), a key
-//!   on the dispatch page. The dispatcher's key wins: while the dispatcher talks, the
-//!   driver's voice is not passed on (and the driver's game sends none).
+//!   on the dispatch page. The dispatcher's key wins in its call: while the dispatcher
+//!   talks, the driver's voice is not passed on (and the driver's game sends none).
 //!
 //! A bus's scripts see the radio and work it, for a terminal of its own in the cab
 //! (`Radio::bus_link`, the variables in docs/MODDING.md): `Phonie_State`, `Phonie_Call`,
@@ -146,22 +150,51 @@ struct PendingRequest {
     taken: bool,
 }
 
+/// A console's call: its players, who talks in it.
 #[derive(Debug, Clone)]
 struct Call {
+    /// The console that made it (one call a console; it alone talks in it and ends it).
+    console: u64,
     kind: CallKind,
-    /// The players called (a general call: everybody, as they come and go).
+    /// The players called (a general call: every driver no other call has, as they come
+    /// and go).
     members: Vec<u32>,
     since: u64,
-}
-
-/// The radio of a dedicated server: the requests, the call, who talks.
-pub(crate) struct RadioServer {
-    requests: Vec<PendingRequest>,
-    call: Option<Call>,
-    /// The console whose key is down (or whose voice came last), and until when it talks.
-    dispatcher: Option<(u64, Instant)>,
+    /// The console's key is down (or its voice came lately) until then.
+    dispatcher: Option<Instant>,
     /// The driver talking in an individual call, and until when.
     driver: Option<(u32, Instant)>,
+}
+
+impl Call {
+    fn talk(&self) -> Talk {
+        let now = Instant::now();
+        if self.dispatcher.is_some_and(|until| until > now) {
+            Talk::Dispatcher
+        } else if self.driver.is_some_and(|(_, until)| until > now) {
+            Talk::Driver
+        } else {
+            Talk::Nobody
+        }
+    }
+}
+
+/// A dispatcher's console.
+#[derive(Debug, Clone)]
+struct Console {
+    id: u64,
+    /// Who sits at it (the dispatch page's account).
+    name: String,
+    /// It may listen to every call ("Secours phonie"), and does.
+    may_monitor: bool,
+    monitor: bool,
+}
+
+/// The radio of a dedicated server: the requests, the consoles and their calls.
+pub(crate) struct RadioServer {
+    requests: Vec<PendingRequest>,
+    calls: Vec<Call>,
+    consoles: Vec<Console>,
     /// What each player was told last, and when the next round of states is due.
     told: std::collections::HashMap<u32, String>,
     refresh: f32,
@@ -175,26 +208,19 @@ impl RadioServer {
     pub(crate) fn new() -> RadioServer {
         dispatch::open_consoles();
         log::info!("server: dispatch radio on (consoles at the gateway's /dispatch)");
-        RadioServer { requests: Vec::new(), call: None, dispatcher: None, driver: None, told: Default::default(), refresh: 0.0, console_state: String::new(), console_refresh: 0.0 }
+        RadioServer { requests: Vec::new(), calls: Vec::new(), consoles: Vec::new(), told: Default::default(), refresh: 0.0, console_state: String::new(), console_refresh: 0.0 }
     }
 
-    fn talk(&self) -> Talk {
-        let now = Instant::now();
-        if self.dispatcher.is_some_and(|(_, until)| until > now) {
-            Talk::Dispatcher
-        } else if self.driver.is_some_and(|(_, until)| until > now) {
-            Talk::Driver
-        } else {
-            Talk::Nobody
-        }
+    /// The call player `id` is in.
+    fn call_of(&self, id: u32) -> Option<&Call> {
+        self.calls.iter().find(|c| c.members.contains(&id))
     }
 
     /// A player's `radio …` command.
     pub(crate) fn command(&mut self, from: u32, arg: &str) {
         if arg.trim() == "request" {
-            // (a driver already in a call with the dispatcher has nothing to ask for)
-            let in_call = self.call.as_ref().is_some_and(|c| c.kind == CallKind::Individual && c.members.contains(&from));
-            if in_call {
+            // (a driver already in a call with a dispatcher has nothing to ask for)
+            if self.call_of(from).is_some_and(|c| c.kind == CallKind::Individual) {
                 return;
             }
             match self.requests.iter_mut().find(|r| r.player == from) {
@@ -209,6 +235,16 @@ impl RadioServer {
         }
     }
 
+    /// A frame to the consoles listening to every call, but `except` (it has it already, or
+    /// it is its own voice).
+    fn to_monitors(&self, except: u64, speaker: u32, frame: &[u8]) {
+        let mut out = speaker.to_le_bytes().to_vec();
+        out.extend_from_slice(frame);
+        for c in self.consoles.iter().filter(|c| c.monitor && c.id != except) {
+            dispatch::to_console(c.id, ConsoleOut::Binary(out.clone()));
+        }
+    }
+
     /// Once a server frame: the consoles' messages and voices, the players' voices, the
     /// players that left, the states told.
     pub(crate) fn tick(&mut self, lan: &mut LanSession, dt: f32) {
@@ -220,69 +256,83 @@ impl RadioServer {
         let mut drivers: Vec<u32> = lan.peers().filter(|p| p.pose.walker.is_none() && p.pose.has_vehicle()).map(|p| p.pose.id).collect();
         drivers.sort_unstable();
         let name = |id: u32| names.get(&id).cloned().unwrap_or_default();
-        // players gone: their requests, their place in a call
+        // players gone: their requests, their place in a call; a general call takes the
+        // drivers no other call has
         self.requests.retain(|r| here.contains(&r.player));
-        if let Some(c) = self.call.as_mut() {
-            match c.kind {
-                CallKind::General => c.members = drivers.clone(),
-                _ => c.members.retain(|m| here.contains(m)),
-            }
-            if c.members.is_empty() && c.kind != CallKind::General {
-                log::info!("radio: the {} call ends, nobody left in it", c.kind.word());
-                self.call = None;
-            }
+        for c in self.calls.iter_mut().filter(|c| c.kind != CallKind::General) {
+            c.members.retain(|m| here.contains(m));
         }
+        let taken: Vec<u32> = self.calls.iter().filter(|c| c.kind != CallKind::General).flat_map(|c| c.members.clone()).collect();
+        for c in self.calls.iter_mut().filter(|c| c.kind == CallKind::General) {
+            c.members = drivers.iter().copied().filter(|d| !taken.contains(d)).collect();
+        }
+        self.calls.retain(|c| {
+            let keep = c.kind == CallKind::General || !c.members.is_empty();
+            if !keep {
+                log::info!("radio: console {}'s {} call ends, nobody left in it", c.console, c.kind.word());
+            }
+            keep
+        });
         for msg in dispatch::take_console_input() {
             match msg {
-                ConsoleIn::Opened(id) => {
-                    log::info!("radio: dispatch console {id} on");
+                ConsoleIn::Opened(id, who, may_monitor) => {
+                    log::info!("radio: dispatch console {id} on ({who}{})", if may_monitor { ", may listen to every call" } else { "" });
+                    self.consoles.push(Console { id, name: who, may_monitor, monitor: false });
+                    dispatch::to_console(id, ConsoleOut::Text(json!({"t": "you", "console": id, "may_monitor": may_monitor}).to_string()));
                     self.console_refresh = 0.0;
                 }
                 ConsoleIn::Closed(id) => {
-                    if self.dispatcher.is_some_and(|(c, _)| c == id) {
-                        self.dispatcher = None;
-                    }
+                    // (a console that went ends its call: nobody would talk in it any more)
+                    self.calls.retain(|c| c.console != id);
+                    self.consoles.retain(|c| c.id != id);
+                    self.refresh = 0.0;
+                    self.console_refresh = 0.0;
                 }
                 ConsoleIn::Text(id, text) => self.console_command(id, &text, &drivers),
                 ConsoleIn::Voice(id, frame) => {
                     if Frame::from_bytes(&frame).is_none() {
                         continue;
                     }
-                    // (another console's key held: one dispatcher talks at a time)
-                    if self.dispatcher.is_some_and(|(c, until)| c != id && until > Instant::now()) {
+                    let Some(c) = self.calls.iter_mut().find(|c| c.console == id) else {
                         continue;
+                    };
+                    c.dispatcher = Some(Instant::now() + TALK_HOLD);
+                    for &m in &c.members {
+                        lan.send_radio(m, dispatch::DISPATCHER, &frame);
                     }
-                    self.dispatcher = Some((id, Instant::now() + TALK_HOLD));
-                    if let Some(c) = self.call.as_ref() {
-                        for &m in &c.members {
-                            lan.send_radio(m, dispatch::DISPATCHER, &frame);
-                        }
-                    }
+                    self.to_monitors(id, dispatch::console_speaker(id), &frame);
                 }
             }
         }
-        // a driver's voice: only in an individual call, only while the dispatcher is quiet
+        // a driver's voice: only in an individual call, only while its dispatcher is quiet;
+        // to the console that called (and the ones listening to every call)
         for (from, frame) in lan.take_radio() {
-            let called = self.call.as_ref().is_some_and(|c| c.kind == CallKind::Individual && c.members == [from]);
-            if !called || self.talk() == Talk::Dispatcher || Frame::from_bytes(&frame).is_none() {
+            if Frame::from_bytes(&frame).is_none() {
                 continue;
             }
-            self.driver = Some((from, Instant::now() + TALK_HOLD));
+            let Some(c) = self.calls.iter_mut().find(|c| c.kind == CallKind::Individual && c.members == [from]) else {
+                continue;
+            };
+            if c.talk() == Talk::Dispatcher {
+                continue;
+            }
+            c.driver = Some((from, Instant::now() + TALK_HOLD));
+            let console = c.console;
             let mut out = from.to_le_bytes().to_vec();
             out.extend_from_slice(&frame);
-            dispatch::to_consoles(ConsoleOut::Binary(out));
+            dispatch::to_console(console, ConsoleOut::Binary(out));
+            self.to_monitors(console, from, &frame);
         }
-        // every player: where the radio stands (at once when it changed)
-        let on_duty = dispatch::console_count() > 0;
+        // every player: where its radio stands (at once when it changed)
+        let on_duty = !self.consoles.is_empty() || dispatch::console_count() > 0;
         self.refresh -= dt;
-        let talk = self.talk();
         let due = self.refresh <= 0.0;
         if due {
             self.refresh = STATE_EVERY;
         }
         for &id in &here {
-            let (call, talk) = match self.call.as_ref().filter(|c| c.members.contains(&id)) {
-                Some(c) => (c.kind.word(), talk.word()),
+            let (call, talk) = match self.call_of(id) {
+                Some(c) => (c.kind.word(), c.talk().word()),
                 None => ("none", "-"),
             };
             let req = match self.requests.iter().find(|r| r.player == id) {
@@ -297,15 +347,18 @@ impl RadioServer {
             }
         }
         self.told.retain(|id, _| here.contains(id));
-        // the consoles: the requests, the call, who talks
+        // the consoles: the requests, every call (whose it is, who talks), the players
         self.console_refresh -= dt;
+        let owner = |console: u64| self.consoles.iter().find(|c| c.id == console).map(|c| c.name.clone()).unwrap_or_default();
         let state = json!({
             "t": "state",
             "requests": self.requests.iter().map(|r| json!({"player": r.player, "name": name(r.player), "since": r.since, "taken": r.taken})).collect::<Vec<_>>(),
-            "call": self.call.as_ref().map(|c| json!({"kind": c.kind.word(), "players": c.members, "since": c.since})),
-            "talk": talk.word(),
-            "driver": self.driver.filter(|_| talk == Talk::Driver).map(|(d, _)| d),
-            "players": here.iter().map(|&id| json!({"id": id, "name": name(id), "bus": drivers.contains(&id)})).collect::<Vec<_>>(),
+            "calls": self.calls.iter().map(|c| {
+                let talk = c.talk();
+                json!({"console": c.console, "owner": owner(c.console), "kind": c.kind.word(), "players": c.members, "since": c.since, "talk": talk.word(), "driver": c.driver.filter(|_| talk == Talk::Driver).map(|(d, _)| d)})
+            }).collect::<Vec<_>>(),
+            "players": here.iter().map(|&id| json!({"id": id, "name": name(id), "bus": drivers.contains(&id), "call": self.call_of(id).map(|c| c.console)})).collect::<Vec<_>>(),
+            "consoles": self.consoles.iter().map(|c| json!({"console": c.id, "name": c.name, "monitor": c.monitor})).collect::<Vec<_>>(),
         })
         .to_string();
         if self.console_refresh <= 0.0 || state != self.console_state {
@@ -315,42 +368,49 @@ impl RadioServer {
         }
     }
 
-    /// A console's message: `{"t": "call" | "end" | "take" | "drop" | "ptt", …}`.
+    /// A console's message: `{"t": "call" | "end" | "take" | "drop" | "ptt" | "monitor", …}`.
     /// (`drivers`: the players a call can reach, those driving a bus of their own)
     fn console_command(&mut self, console: u64, text: &str, drivers: &[u32]) {
         let Ok(v) = serde_json::from_str::<Value>(text) else {
             return;
         };
         let player = v.get("player").and_then(Value::as_u64).map(|p| p as u32);
+        let refuse = |why: String| dispatch::to_console(console, ConsoleOut::Text(json!({"t": "error", "text": why}).to_string()));
         match v.get("t").and_then(Value::as_str).unwrap_or("") {
             "call" => {
                 let Some(kind) = v.get("kind").and_then(Value::as_str).and_then(CallKind::parse) else {
                     return;
                 };
+                // (the players in another console's call stay there; this console's own call
+                // gives way to the new one)
+                let busy: Vec<u32> = self.calls.iter().filter(|c| c.console != console).flat_map(|c| c.members.clone()).collect();
                 let asked: Vec<u32> = v.get("players").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|p| p as u32).collect()).unwrap_or_default();
                 let members: Vec<u32> = match kind {
-                    CallKind::General => drivers.to_vec(),
-                    _ => asked.into_iter().filter(|p| drivers.contains(p)).collect(),
+                    CallKind::General => drivers.iter().copied().filter(|d| !busy.contains(d)).collect(),
+                    _ => asked.iter().copied().filter(|p| drivers.contains(p) && !busy.contains(p)).collect(),
                 };
-                if members.is_empty() && kind != CallKind::General {
-                    return;
-                }
-                if kind == CallKind::Individual && members.len() != 1 {
+                if kind != CallKind::General && (members.is_empty() || (kind == CallKind::Individual && members.len() != 1)) {
+                    let other = asked.iter().find_map(|p| self.call_of(*p)).filter(|c| c.console != console).map(|c| c.console);
+                    let owner = other.and_then(|o| self.consoles.iter().find(|c| c.id == o)).map(|c| c.name.clone());
+                    refuse(match owner {
+                        Some(o) => format!("already in a call with {o}"),
+                        None => "nobody to call: not driving a bus, or gone".into(),
+                    });
                     return;
                 }
                 // a driver called back: the request is answered
                 if kind == CallKind::Individual {
                     self.requests.retain(|r| r.player != members[0]);
                 }
-                log::info!("radio: {} call to {:?}", kind.word(), members);
-                self.call = Some(Call { kind, members, since: unix_now() });
-                self.driver = None;
+                log::info!("radio: console {console}: {} call to {:?}", kind.word(), members);
+                self.calls.retain(|c| c.console != console);
+                self.calls.push(Call { console, kind, members, since: unix_now(), dispatcher: None, driver: None });
             }
             "end" => {
-                if let Some(c) = self.call.take() {
-                    log::info!("radio: the {} call ends", c.kind.word());
+                if let Some(c) = self.calls.iter().find(|c| c.console == console) {
+                    log::info!("radio: console {console}: the {} call ends", c.kind.word());
                 }
-                self.driver = None;
+                self.calls.retain(|c| c.console != console);
             }
             "take" => {
                 if let Some(r) = self.requests.iter_mut().find(|r| Some(r.player) == player) {
@@ -360,14 +420,21 @@ impl RadioServer {
             "drop" => self.requests.retain(|r| Some(r.player) != player),
             "ptt" => {
                 let on = v.get("on").and_then(Value::as_bool).unwrap_or(false);
-                let mine = self.dispatcher.is_some_and(|(c, _)| c == console);
-                let other_talks = self.dispatcher.is_some_and(|(c, until)| c != console && until > Instant::now());
-                if on && !other_talks {
+                if let Some(c) = self.calls.iter_mut().find(|c| c.console == console) {
                     // (held until the key is let go; the voice frames keep it on after that)
-                    self.dispatcher = Some((console, Instant::now() + Duration::from_secs(60)));
-                    self.driver = None;
-                } else if !on && mine {
-                    self.dispatcher = Some((console, Instant::now() + TALK_HOLD));
+                    c.dispatcher = Some(Instant::now() + if on { Duration::from_secs(60) } else { TALK_HOLD });
+                    if on {
+                        c.driver = None;
+                    }
+                }
+            }
+            "monitor" => {
+                let on = v.get("on").and_then(Value::as_bool).unwrap_or(false);
+                if let Some(c) = self.consoles.iter_mut().find(|c| c.id == console) {
+                    if c.may_monitor {
+                        c.monitor = on;
+                        log::info!("radio: console {console} ({}) {} every call", c.name, if on { "listens to" } else { "no longer listens to" });
+                    }
                 }
             }
             _ => {}
@@ -769,7 +836,7 @@ mod tests {
         let port = host.local_addr().unwrap().port();
         let mut driver = LanSession::join(&port.to_string(), "driver", world(), Duration::from_secs(1)).unwrap();
         let mut radio = RadioServer::new();
-        let (console, rx) = dispatch::register_console();
+        let (console, rx) = dispatch::register_console("Dispatcher", false);
         let pose = |x: f64| Pose { name: "p".into(), bus: "Vehicles/x.bus".into(), flags: omsi_net::FLAG_VEHICLE, x, ..Default::default() };
         let mut told: Vec<String> = Vec::new();
         let mut to_console: Vec<ConsoleOut> = Vec::new();
@@ -800,7 +867,7 @@ mod tests {
             out.iter()
                 .rev()
                 .find_map(|m| match m {
-                    ConsoleOut::Text(t) => serde_json::from_str::<Value>(t).ok(),
+                    ConsoleOut::Text(t) => serde_json::from_str::<Value>(t).ok().filter(|v| v["t"] == "state"),
                     _ => None,
                 })
                 .unwrap_or(Value::Null)
@@ -820,7 +887,8 @@ mod tests {
         dispatch::console_said(ConsoleIn::Text(console, json!({"t": "call", "kind": "individual", "players": [me]}).to_string()));
         run(&mut host, &mut driver, &mut radio, 10, &mut told, &mut to_console);
         assert_eq!(last_state(&told), "state individual - none on");
-        assert_eq!(console_state(&to_console)["call"]["kind"], "individual");
+        assert_eq!(console_state(&to_console)["calls"][0]["kind"], "individual");
+        assert_eq!(console_state(&to_console)["calls"][0]["console"], console);
         // the driver talks: the console hears it, the driver's id first
         let frame = dispatch::Encoder::default().encode(&[0.2; dispatch::FRAME_SAMPLES]).to_bytes();
         to_console.clear();
@@ -925,7 +993,7 @@ mod tests {
         let bus = Pose { name: "driver".into(), bus: "Vehicles/x.bus".into(), flags: omsi_net::FLAG_VEHICLE, x: 50.0, ..Default::default() };
         let afoot = Pose { name: "walker".into(), x: 80.0, ..Default::default() };
         let mut radio = RadioServer::new();
-        let (console, rx) = dispatch::register_console();
+        let (console, rx) = dispatch::register_console("Dispatcher", false);
         let mut last = Value::Null;
         let mut run = |host: &mut LanSession, driver: &mut LanSession, walker: &mut LanSession, radio: &mut RadioServer, rounds: usize| {
             for _ in 0..rounds {
@@ -935,7 +1003,11 @@ mod tests {
                 radio.tick(host, 0.05);
                 for m in rx.try_iter() {
                     if let ConsoleOut::Text(t) = m {
-                        last = serde_json::from_str(&t).unwrap_or(Value::Null);
+                        if let Ok(v) = serde_json::from_str::<Value>(&t) {
+                            if v["t"] == "state" {
+                                last = v;
+                            }
+                        }
                     }
                 }
                 std::thread::sleep(Duration::from_millis(5));
@@ -956,13 +1028,87 @@ mod tests {
         // the general call: the driver alone
         dispatch::console_said(ConsoleIn::Text(console, json!({"t": "call", "kind": "general"}).to_string()));
         let st = run(&mut host, &mut driver, &mut walker, &mut radio, 6);
-        assert_eq!(st["call"]["players"], json!([d]));
+        assert_eq!(st["calls"][0]["players"], json!([d]));
         // the walker called on its own: no call
         dispatch::console_said(ConsoleIn::Text(console, json!({"t": "end"}).to_string()));
         dispatch::console_said(ConsoleIn::Text(console, json!({"t": "call", "kind": "individual", "players": [w]}).to_string()));
         let st = run(&mut host, &mut driver, &mut walker, &mut radio, 6);
-        assert!(st["call"].is_null(), "{st}");
+        assert_eq!(st["calls"], json!([]), "{st}");
         dispatch::unregister_console(console);
+    }
+
+    /// Two dispatchers, each with a call of its own, and one listening to every call: each
+    /// hears its own driver only, the listener hears both drivers and the other dispatcher.
+    #[test]
+    fn each_console_has_its_call_and_one_may_listen_to_all() {
+        let _hub = hub_test();
+        use omsi_net::{Pose, WorldInfo};
+        let world = || WorldInfo { map: "m".into(), date: "2026-10-06".into(), time: 36000.0, weather: String::new(), season: String::new() };
+        let mut host = LanSession::host(27975, "Server", world(), true).unwrap();
+        let port = host.local_addr().unwrap().port();
+        let mut a = LanSession::join(&port.to_string(), "a", world(), Duration::from_secs(1)).unwrap();
+        let mut b = LanSession::join(&port.to_string(), "b", world(), Duration::from_secs(1)).unwrap();
+        let bus = |x: f64| Pose { name: "p".into(), bus: "Vehicles/x.bus".into(), flags: omsi_net::FLAG_VEHICLE, x, ..Default::default() };
+        let mut radio = RadioServer::new();
+        let (c1, rx1) = dispatch::register_console("Alice", false);
+        let (c2, rx2) = dispatch::register_console("Bob", false);
+        let (c3, rx3) = dispatch::register_console("Chef", true);
+        let mut run = |host: &mut LanSession, a: &mut LanSession, b: &mut LanSession, radio: &mut RadioServer, rounds: usize| {
+            for _ in 0..rounds {
+                host.tick(0.05, &Pose::default());
+                a.tick(0.05, &bus(50.0));
+                b.tick(0.05, &bus(90.0));
+                radio.tick(host, 0.05);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        for _ in 0..80 {
+            run(&mut host, &mut a, &mut b, &mut radio, 1);
+            if host.peers().filter(|p| p.has_pose).count() == 2 {
+                break;
+            }
+        }
+        let voices = |rx: &std::sync::mpsc::Receiver<ConsoleOut>| -> Vec<u32> {
+            rx.try_iter().filter_map(|m| if let ConsoleOut::Binary(v) = m { Some(u32::from_le_bytes([v[0], v[1], v[2], v[3]])) } else { None }).collect()
+        };
+        let (ida, idb) = (a.my_id, b.my_id);
+        let say = |console: u64, v: Value| dispatch::console_said(ConsoleIn::Text(console, v.to_string()));
+        say(c1, json!({"t": "call", "kind": "individual", "players": [ida]}));
+        say(c2, json!({"t": "call", "kind": "individual", "players": [idb]}));
+        say(c3, json!({"t": "monitor", "on": true}));
+        // Bob may not take Alice's driver
+        say(c2, json!({"t": "call", "kind": "individual", "players": [ida]}));
+        run(&mut host, &mut a, &mut b, &mut radio, 6);
+        let refused = rx2.try_iter().any(|m| matches!(m, ConsoleOut::Text(t) if t.contains("already in a call with Alice")));
+        assert!(refused, "Bob was not told the driver is Alice's");
+        let _ = (voices(&rx1), voices(&rx3));
+        // both drivers talk
+        let frame = dispatch::Encoder::default().encode(&[0.2; dispatch::FRAME_SAMPLES]).to_bytes();
+        a.send_radio(1, ida, &frame);
+        b.send_radio(1, idb, &frame);
+        run(&mut host, &mut a, &mut b, &mut radio, 8);
+        assert_eq!(voices(&rx1), vec![ida], "Alice hears her driver only");
+        let mut heard_by_bob = voices(&rx2);
+        assert_eq!(heard_by_bob, vec![idb], "Bob hears his driver only");
+        let mut all = voices(&rx3);
+        all.sort_unstable();
+        assert_eq!(all, { let mut v = vec![ida, idb]; v.sort_unstable(); v }, "the listener hears both");
+        // Alice talks: her driver hears her, the listener too (as Alice), Bob does not
+        let _ = a.take_radio();
+        let _ = b.take_radio();
+        dispatch::console_said(ConsoleIn::Voice(c1, frame.clone()));
+        run(&mut host, &mut a, &mut b, &mut radio, 6);
+        assert_eq!(a.take_radio().len(), 1);
+        assert!(b.take_radio().is_empty());
+        assert_eq!(voices(&rx3), vec![dispatch::console_speaker(c1)]);
+        heard_by_bob = voices(&rx2);
+        assert!(heard_by_bob.is_empty());
+        // a console that goes ends its call
+        dispatch::unregister_console(c1);
+        run(&mut host, &mut a, &mut b, &mut radio, 6);
+        assert!(radio.calls.iter().all(|c| c.console != c1));
+        dispatch::unregister_console(c2);
+        dispatch::unregister_console(c3);
     }
 
     #[test]

@@ -12,7 +12,10 @@
 //! * A dispatcher's console (the server's web dispatch page) connects to the server's
 //!   gateway at `/dispatch` (a WebSocket, from this machine only, with the admin password -
 //!   see `ws.rs`): JSON text messages both ways, and the voice as binary messages - a
-//!   frame from the console, `[id u32][frame]` to it. The consoles' messages wait in a
+//!   frame from the console, `[speaker u32][frame]` to it (a player's id, or
+//!   `console_speaker` for another console's dispatcher). The door's headers say who sits
+//!   at the console (`X-Dispatcher`, percent-encoded) and whether it may listen to every
+//!   call (`X-Dispatcher-Monitor: 1`). The consoles' messages wait in a
 //!   process-wide hub (`take_console_input`) for the server loop, which owns the session.
 
 use std::sync::mpsc;
@@ -28,6 +31,12 @@ pub const FRAME_SAMPLES: usize = 320;
 pub const MAX_FRAME: usize = 5 + 400;
 /// Who speaks in a datagram from the server when it is the dispatcher.
 pub const DISPATCHER: u32 = 0;
+
+/// Who speaks in a frame to a console when it is another console's dispatcher (a console
+/// that listens to every call hears them): this bit and the console's id.
+pub fn console_speaker(console: u64) -> u32 {
+    0x8000_0000 | (console as u32 & 0x7FFF_FFFF)
+}
 
 // ---------------------------------------------------------------------------------------
 // IMA ADPCM
@@ -189,8 +198,9 @@ pub fn read_datagram(d: &[u8]) -> Option<(u32, &[u8])> {
 /// What came from a console, for the server loop.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConsoleIn {
-    /// A console connected (its id: the server answers it alone with `to_console`).
-    Opened(u64),
+    /// A console connected (its id: the server answers it alone with `to_console`), who sits
+    /// at it, and whether it may listen to every call.
+    Opened(u64, String, bool),
     Closed(u64),
     /// A JSON message.
     Text(u64, String),
@@ -257,13 +267,13 @@ pub fn to_console(id: u64, msg: ConsoleOut) {
 }
 
 /// A console comes in: its id and where its messages arrive.
-pub fn register_console() -> (u64, mpsc::Receiver<ConsoleOut>) {
+pub fn register_console(name: &str, monitor: bool) -> (u64, mpsc::Receiver<ConsoleOut>) {
     let (tx, rx) = mpsc::channel();
     let mut h = hub();
     let id = h.next;
     h.next += 1;
     h.consoles.push((id, tx));
-    h.inbox.push(ConsoleIn::Opened(id));
+    h.inbox.push(ConsoleIn::Opened(id, name.chars().filter(|c| !c.is_control()).take(48).collect(), monitor));
     (id, rx)
 }
 

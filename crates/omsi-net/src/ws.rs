@@ -567,7 +567,9 @@ fn serve(stream: TcpStream, target: SocketAddr, info: &Mutex<ServerInfo>, stop: 
         let mut ws = tungstenite::accept(stream).map_err(|e| e.to_string())?;
         ws.get_mut().set_read_timeout(Some(Duration::from_millis(5))).map_err(|e| e.to_string())?;
         log::info!("gateway: a dispatch console connected");
-        return console(&mut ws, stop);
+        let name = header(head, "x-dispatcher").map(percent_decode).unwrap_or_default();
+        let monitor = header(head, "x-dispatcher-monitor").is_some_and(|v| v.trim() == "1");
+        return console(&mut ws, stop, &name, monitor);
     }
     if path.starts_with("/tcp") {
         // a byte stream to the session's TCP port (the host's mods): the way the files go
@@ -653,10 +655,31 @@ fn pump<S: Read + Write>(ws: &mut WebSocket<S>, udp: &UdpSocket, mut send: impl 
     Ok(())
 }
 
+/// `%XX` escapes as their bytes (a name in a header: UTF-8, percent-encoded).
+fn percent_decode(s: &str) -> String {
+    let b = s.trim().as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        match (b[i], b.get(i + 1).copied().and_then(hex), b.get(i + 2).copied().and_then(hex)) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            (c, _, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// A dispatcher's console until it goes: its messages to the hub, the server's to it.
-fn console<S: Read + Write>(ws: &mut WebSocket<S>, stop: &AtomicBool) -> Result<(), String> {
+fn console<S: Read + Write>(ws: &mut WebSocket<S>, stop: &AtomicBool, name: &str, monitor: bool) -> Result<(), String> {
     use crate::dispatch::{ConsoleIn, ConsoleOut};
-    let (id, rx) = crate::dispatch::register_console();
+    let (id, rx) = crate::dispatch::register_console(name, monitor);
     let r = (|| {
         let mut last_in = Instant::now();
         let mut last_ping = Instant::now();
