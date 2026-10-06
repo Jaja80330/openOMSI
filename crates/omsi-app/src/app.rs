@@ -472,6 +472,11 @@ impl App {
         if omsi_cfg::env::var_os("OMSI_BACKGROUND").is_some() {
             attrs = attrs.with_active(false);
         }
+        // (a new window is painted white until the graphics device is up, a second or more:
+        // it shows once its first picture - the loading screen - is drawn)
+        if cfg!(windows) {
+            attrs = attrs.with_visible(false);
+        }
         let window = match given {
             Some(w) => w,
             // (no display to open it on, a compositor that refuses it: said so, not a panic
@@ -542,8 +547,14 @@ impl App {
             // (its first picture is the loading screen, which stays while the world is read -
             // not a black or a stale one)
             self.load_frame(&omsi_ui::tr("Reading the map"), 0.04);
+            if let Some(w) = self.window.as_ref() {
+                w.set_visible(true);
+            }
             self.load_world_now(event_loop);
         } else {
+            if let Some(w) = self.window.as_ref() {
+                w.set_visible(true);
+            }
             let mut fonts = omsi_sim::texttex::FontLibrary::new(&self.args.root);
             self.hud = Some(hud::Hud::new(&mut fonts));
             self.menu = Some(menu::Menu::new(&self.args.root, &self.args.map));
@@ -998,7 +1009,7 @@ impl App {
             .unwrap_or_else(|| {
                 // (before the map is read: its folder's name)
                 let p = self.args.map.replace('\\', "/");
-                p.trim_end_matches("/global.cfg").rsplit('/').next().unwrap_or("").replace(['_', '-'], " ")
+                p.trim_end_matches("/global.cfg").rsplit('/').next().unwrap_or("").replace('_', " ")
             });
         let bus = self.args.bus.as_deref().map(|b| b.replace('\\', "/")).and_then(|b| b.rsplit('/').next().map(|f| f.trim_end_matches(".bus").replace('_', " "))).unwrap_or_default();
         let mut sub = bus;
@@ -1018,6 +1029,9 @@ impl App {
     /// placed): what is done, the bar where it is.
     pub(crate) fn load_frame(&mut self, status: &str, progress: f32) {
         let screen = self.load_screen(status.to_string(), progress);
+        if let Some(ui) = self.ui.as_mut() {
+            ui.load_jump(progress);
+        }
         self.draw_load_screen(&screen);
     }
 

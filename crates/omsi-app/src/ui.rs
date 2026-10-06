@@ -1209,16 +1209,20 @@ impl Ui {
         self.load_last = Some(now);
         let target = l.progress.clamp(0.0, 1.0).max(self.load_shown);
         self.load_shown += (target - self.load_shown) * (1.0 - (-dt * 5.0).exp());
-        if l.progress <= 0.0 && dt == 0.0 {
-            self.load_shown = 0.0;
-        }
-        let bg = self.text.solid(r, scene, [8, 9, 11, 255]);
+        // the background: near black, lighter towards the bottom where the text stands (a
+        // gradient drawn once, stretched; no bands)
+        let bg = self.text.cached(r, scene, ("loading backdrop".into(), 256, [0, 0, 0, 0]), (2, 256), || {
+            (0..256u32)
+                .flat_map(|y| {
+                    let t = (y as f32 / 255.0).powf(1.6);
+                    let c = |a: f32, b: f32| (a + (b - a) * t).round() as u8;
+                    let px = [c(8.0, 26.0), c(9.0, 29.0), c(11.0, 36.0), 255];
+                    [px, px]
+                })
+                .flatten()
+                .collect()
+        });
         scene.overlays.push((bg, [0.0, 0.0, width, height]));
-        // a soft light from the lower left, as the launcher's picture behind its text
-        let glow = self.text.solid(r, scene, [24, 27, 33, 255]);
-        scene.overlays.push((glow, [0.0, height * 0.55, width, height]));
-        let shade = self.text.solid(r, scene, [14, 16, 20, 255]);
-        scene.overlays.push((shade, [0.0, height * 0.45, width, height * 0.55]));
         let x = 64.0 * s;
         let y = height - 230.0 * s;
         let put = |ui: &mut Ui, scene: &mut Scene, text: &str, px: f32, bold: bool, color: [u8; 4], x: f32, y: f32| {
@@ -1263,6 +1267,13 @@ impl Ui {
         let v = self.text.label(r, scene, crate::startup::VERSION, (12.0 * s) as u32, [110, 110, 114, 0]);
         scene.overlays.push((v.tex, [width - 24.0 * s - v.w as f32, height - 34.0 * s, width - 24.0 * s, height - 34.0 * s + v.h as f32]));
         self.text.end_frame(r, scene);
+    }
+
+    /// The loading bar straight to `progress` (a step that holds the window has one picture:
+    /// no easing to see there).
+    pub fn load_jump(&mut self, progress: f32) {
+        self.load_shown = self.load_shown.max(progress.clamp(0.0, 1.0));
+        self.load_last = None;
     }
 
     /// Seconds since the interface began, for what runs by itself (the loading bar's light).
