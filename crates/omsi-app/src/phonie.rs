@@ -15,6 +15,13 @@
 //!   on the dispatch page. The dispatcher's key wins: while the dispatcher talks, the
 //!   driver's voice is not passed on (and the driver's game sends none).
 //!
+//! A bus's scripts see the radio and work it, for a terminal of its own in the cab
+//! (`Radio::bus_link`, the variables in docs/MODDING.md): `Phonie_State`, `Phonie_Call`,
+//! `Phonie_Talk`, `Phonie_Request`, `Phonie_PTT`, `Phonie_Sending` and `Phonie_Receiving`
+//! are written into the variables the bus declares; `Phonie_Cmd_Request` (set to 1: a
+//! request goes out, and it is set back to 0) and `Phonie_Cmd_PTT` (1 while the cab's key
+//! is held) are read from them.
+//!
 //! The voice goes as `omsi_net::dispatch` frames (8 kHz ADPCM); the radio's sound is made
 //! where it is heard (`omsi_audio::twoway`). The server tells each player where its radio
 //! stands every two seconds and whenever it changes: `radio state <call> <talk> <request>
@@ -409,6 +416,23 @@ impl Button {
     }
 }
 
+/// The variables of the bus driven (`Radio::bus_link`): only those its scripts declare.
+pub(crate) trait BusVars {
+    fn var(&self, name: &str) -> Option<f32>;
+    /// Whether the bus has the variable.
+    fn set_var(&mut self, name: &str, v: f32) -> bool;
+}
+
+impl BusVars for omsi_sim::VehicleInstance {
+    fn var(&self, name: &str) -> Option<f32> {
+        omsi_sim::VehicleInstance::var(self, name)
+    }
+
+    fn set_var(&mut self, name: &str, v: f32) -> bool {
+        omsi_sim::VehicleInstance::set_var(self, name, v)
+    }
+}
+
 /// A request unanswered this long is over in the game (the dispatcher keeps it).
 const REQUEST_WAIT: Duration = Duration::from_secs(60);
 
@@ -425,6 +449,8 @@ pub(crate) struct Radio {
     requested: Option<Instant>,
     /// The key (`radio_ptt`) is held.
     pub ptt: bool,
+    /// The bus's own key (`Phonie_Cmd_PTT`) is held.
+    bus_ptt: bool,
     sending: bool,
     mic: Option<omsi_audio::twoway::Mic>,
     mic_error: Option<String>,
@@ -451,6 +477,7 @@ impl Radio {
             on_duty: false,
             requested: None,
             ptt: false,
+            bus_ptt: false,
             sending: false,
             mic: None,
             mic_error: None,
@@ -584,7 +611,8 @@ impl Radio {
             self.mic = None;
             self.mic_error = None;
         }
-        let send = self.ptt && may_talk && self.talk != Talk::Dispatcher;
+        let ptt = self.ptt || self.bus_ptt;
+        let send = ptt && may_talk && self.talk != Talk::Dispatcher;
         if send && !self.sending {
             self.encoder.restart();
             if let Some(m) = self.mic.as_ref() {
@@ -594,7 +622,7 @@ impl Radio {
         let was_sending = self.sending;
         self.sending = send && self.mic.is_some();
         // our own key let go, in an individual call: the release tone here as well
-        if was_sending && !self.sending && !self.ptt && may_talk {
+        if was_sending && !self.sending && !ptt && may_talk {
             self.play_tone(omsi_audio::twoway::Tone::PttRelease);
         }
         if let Some(m) = self.mic.as_ref() {
@@ -605,6 +633,43 @@ impl Radio {
                 }
             }
         }
+    }
+
+    /// The bus's scripts and the radio, once a frame before `tick`: what the radio does
+    /// into the variables the bus declares, a request and the key from them.
+    pub(crate) fn bus_link(&mut self, bus: &mut impl BusVars, lan: &mut LanSession) {
+        // the cab's terminal: its call button, its key
+        if bus.var("Phonie_Cmd_Request").is_some_and(|x| x >= 0.5) {
+            bus.set_var("Phonie_Cmd_Request", 0.0);
+            self.request(lan);
+        }
+        self.bus_ptt = bus.var("Phonie_Cmd_PTT").is_some_and(|x| x >= 0.5);
+        let hud = self.hud();
+        let state = match hud.as_ref().map(|h| h.button) {
+            Some(Button::Idle) => 0.0,
+            Some(Button::Requested) => 1.0,
+            Some(Button::InCall) => 2.0,
+            Some(Button::Unavailable) | None => 3.0,
+        };
+        let call = match self.call.filter(|_| self.available()) {
+            None => 0.0,
+            Some(CallKind::Individual) => 1.0,
+            Some(CallKind::Selective) => 2.0,
+            Some(CallKind::General) => 3.0,
+        };
+        let talk = match self.talk {
+            Talk::Nobody => 0.0,
+            Talk::Dispatcher => 1.0,
+            Talk::Driver => 2.0,
+        };
+        let flag = |b: bool| if b { 1.0 } else { 0.0 };
+        bus.set_var("Phonie_State", state);
+        bus.set_var("Phonie_Call", call);
+        bus.set_var("Phonie_Talk", talk);
+        bus.set_var("Phonie_Request", flag(self.requesting()));
+        bus.set_var("Phonie_PTT", flag(self.ptt || self.bus_ptt));
+        bus.set_var("Phonie_Sending", flag(self.sending));
+        bus.set_var("Phonie_Receiving", flag(self.receiving.is_some()));
     }
 
     pub(crate) fn hud(&self) -> Option<RadioHud> {
@@ -626,7 +691,7 @@ impl Radio {
             button,
             can_request: self.can_request(),
             sending: self.sending,
-            blocked: self.ptt && !self.sending && self.call.is_some(),
+            blocked: (self.ptt || self.bus_ptt) && !self.sending && self.call.is_some(),
             mic_error: self.mic_error.clone(),
         })
     }
@@ -778,6 +843,57 @@ mod tests {
         let mut r = Radio::new();
         r.play_tone(omsi_audio::twoway::Tone::PttRelease);
         assert!(r.out.buffered() >= PREBUFFER);
+    }
+
+    /// A bus whose varlist declares some of the radio's variables.
+    struct Vars(std::collections::HashMap<String, f32>);
+
+    impl BusVars for Vars {
+        fn var(&self, name: &str) -> Option<f32> {
+            self.0.get(name).copied()
+        }
+
+        fn set_var(&mut self, name: &str, v: f32) -> bool {
+            match self.0.get_mut(name) {
+                Some(x) => {
+                    *x = v;
+                    true
+                }
+                None => false,
+            }
+        }
+    }
+
+    #[test]
+    fn the_bus_scripts_see_the_radio_and_work_it() {
+        use omsi_net::WorldInfo;
+        let world = || WorldInfo { map: "m".into(), date: "2026-10-06".into(), time: 36000.0, weather: String::new(), season: String::new() };
+        let mut lan = LanSession::host(27960, "Server", world(), true).unwrap();
+        let mut bus = Vars(["Phonie_State", "Phonie_Call", "Phonie_Talk", "Phonie_Request", "Phonie_PTT", "Phonie_Cmd_Request", "Phonie_Cmd_PTT"].iter().map(|n| (n.to_string(), 0.0)).collect());
+        let mut r = Radio::new();
+        // no radio on the server: unavailable; a variable the bus does not declare stays away
+        r.bus_link(&mut bus, &mut lan);
+        assert_eq!(bus.0["Phonie_State"], 3.0);
+        assert!(!bus.0.contains_key("Phonie_Sending"));
+        r.on_command("state none - none on");
+        r.bus_link(&mut bus, &mut lan);
+        assert_eq!(bus.0["Phonie_State"], 0.0);
+        // the cab's call button: a request goes out, the command is taken back
+        bus.0.insert("Phonie_Cmd_Request".into(), 1.0);
+        r.bus_link(&mut bus, &mut lan);
+        assert_eq!(bus.0["Phonie_Cmd_Request"], 0.0);
+        assert!(r.requesting());
+        r.bus_link(&mut bus, &mut lan);
+        assert_eq!((bus.0["Phonie_State"], bus.0["Phonie_Request"]), (1.0, 1.0));
+        // called back, the dispatcher talking; the cab's key held
+        r.on_command("state individual dispatcher none on");
+        bus.0.insert("Phonie_Cmd_PTT".into(), 1.0);
+        r.bus_link(&mut bus, &mut lan);
+        assert_eq!((bus.0["Phonie_State"], bus.0["Phonie_Call"], bus.0["Phonie_Talk"], bus.0["Phonie_PTT"]), (2.0, 1.0, 1.0, 1.0));
+        assert!(r.hud().unwrap().blocked, "the dispatcher's key wins over the cab's");
+        r.on_command("state general - none on");
+        r.bus_link(&mut bus, &mut lan);
+        assert_eq!(bus.0["Phonie_Call"], 3.0);
     }
 
     #[test]
