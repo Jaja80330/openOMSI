@@ -641,25 +641,16 @@ impl Radio {
             let Some(frame) = Frame::from_bytes(&bytes) else {
                 continue;
             };
-            if self.receiving.is_none() {
-                let open = self.fx.open();
-                self.play(&open);
-            }
             self.receiving = Some(Instant::now());
             let samples = self.fx.voice(&frame.decode());
             self.play(&samples);
         }
-        // the other side let go of its key: in an individual call the release tone, in the
-        // others the squelch closing (a call that ended has its own tone)
+        // the other side let go of its key: in an individual call the release tone, nothing in
+        // the others (no squelch; a call that ended has its own tone)
         if self.receiving.is_some_and(|t| t.elapsed() > RX_END) {
             self.receiving = None;
-            match self.call {
-                Some(CallKind::Individual) => self.play_tone(omsi_audio::twoway::Tone::PttRelease),
-                Some(_) => {
-                    let tail = self.fx.tail();
-                    self.play(&tail);
-                }
-                None => {}
+            if self.call == Some(CallKind::Individual) {
+                self.play_tone(omsi_audio::twoway::Tone::PttRelease);
             }
         }
         if let Some(audio) = audio {

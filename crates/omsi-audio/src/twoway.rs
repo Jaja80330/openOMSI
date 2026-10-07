@@ -1,7 +1,8 @@
 //! The dispatch radio's sound: the microphone taken at the radio's rate, and what comes in
 //! made to sound like an analogue two-way radio in a bus cab - a narrow band (300 Hz to
-//! 3 kHz), the level squeezed even and driven a little into the speaker's distortion, a
-//! hiss under the voice, the squelch opening with a click and closing with its "kssh".
+//! 3 kHz), the level squeezed even and driven a little into the speaker's distortion and
+//! fading slightly. Nothing else: no hiss under the voice, no squelch click or "kssh" when a
+//! key goes down or up (the terminal's own tones are `Tone`).
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::OnceLock;
@@ -57,21 +58,6 @@ impl Biquad {
     }
 }
 
-/// White noise (xorshift), -1..1.
-#[derive(Debug, Clone)]
-struct Noise(u32);
-
-impl Noise {
-    fn next(&mut self) -> f32 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.0 = x;
-        (x as f32 / u32::MAX as f32) * 2.0 - 1.0
-    }
-}
-
 /// The radio's sound, at `rate` (the radio's 8 kHz): voice in, what the cab's speaker
 /// gives out.
 pub struct RadioFx {
@@ -79,8 +65,6 @@ pub struct RadioFx {
     band: [Biquad; 5],
     /// The level the voice is squeezed to (a radio's AGC and the transmitter's limiter).
     env: f32,
-    noise: Noise,
-    hiss: [Biquad; 2],
     /// The signal fading a little, slowly (a bus driving through the city).
     fade_phase: f32,
 }
@@ -98,16 +82,8 @@ impl RadioFx {
                 Biquad::peak(r, 1600.0, 1.2, 5.0),
             ],
             env: 0.0,
-            noise: Noise(0x9E37_79B9),
-            hiss: [Biquad::highpass(r, 900.0, 0.7), Biquad::lowpass(r, 3400.0, 0.7)],
             fade_phase: 0.0,
         }
-    }
-
-    fn hiss(&mut self) -> f32 {
-        let n = self.noise.next();
-        let n = self.hiss[0].run(n);
-        self.hiss[1].run(n)
     }
 
     /// Voice samples (-1..1) as the radio gives them out.
@@ -132,37 +108,9 @@ impl RadioFx {
             // fading, slow and slight
             self.fade_phase = (self.fade_phase + 0.7 / self.rate) % 1.0;
             let fade = 1.0 - 0.08 * (0.5 + 0.5 * (self.fade_phase * std::f32::consts::TAU).sin());
-            let h = self.hiss() * 0.05;
-            out.push((y * 0.62 * fade + h).clamp(-1.0, 1.0));
+            out.push((y * 0.62 * fade).clamp(-1.0, 1.0));
         }
         out
-    }
-
-    /// The squelch opening: a click and a breath of noise before the voice (it also fills
-    /// the buffer the first frames play from).
-    pub fn open(&mut self) -> Vec<f32> {
-        let n = (0.09 * self.rate) as usize;
-        (0..n)
-            .map(|i| {
-                let t = i as f32 / self.rate;
-                let click = if i < 24 { (1.0 - i as f32 / 24.0) * 0.5 * if i % 2 == 0 { 1.0 } else { -0.6 } } else { 0.0 };
-                let env = (t / 0.01).min(1.0) * (1.0 - t / 0.09).max(0.0);
-                click + self.hiss() * 0.3 * env
-            })
-            .collect()
-    }
-
-    /// The squelch closing: the "kssh" after the other side lets go of the key.
-    pub fn tail(&mut self) -> Vec<f32> {
-        let len = 0.22;
-        let n = (len * self.rate) as usize;
-        (0..n)
-            .map(|i| {
-                let t = i as f32 / self.rate;
-                let env = (t / 0.006).min(1.0) * if t > 0.15 { (1.0 - (t - 0.15) / (len - 0.15)).max(0.0) } else { 1.0 };
-                (self.noise.next() * 0.55 + self.hiss() * 0.6) * 0.55 * env
-            })
-            .collect()
     }
 }
 
@@ -340,13 +288,13 @@ mod tests {
         }
     }
 
+    /// The radio's effect is on the voice alone: silence in, silence out (no hiss, no
+    /// squelch), and a voice comes out as a voice.
     #[test]
-    fn the_squelch_sounds_are_short_and_end_quiet() {
+    fn the_radio_effect_adds_no_noise_of_its_own() {
         let mut fx = RadioFx::new(8000);
-        let open = fx.open();
-        let tail = fx.tail();
-        assert!(open.len() < 1000 && tail.len() < 2000);
-        assert!(tail.last().unwrap().abs() < 0.05);
-        assert!(rms(&tail) > 0.05);
+        assert!(fx.voice(&vec![0.0; 4000]).iter().all(|&x| x == 0.0));
+        let tone: Vec<f32> = (0..4000).map(|i| 0.4 * (i as f32 * 0.35).sin()).collect();
+        assert!(rms(&fx.voice(&tone)) > 0.1);
     }
 }
