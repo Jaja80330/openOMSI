@@ -2352,7 +2352,7 @@ impl App {
             self.list_kind = Some(crate::game_lists::ListKind::Tours(line, Some((tour, i, trip))));
             return;
         }
-        crate::game_lists::start_duty_at(self, &line, &tour, trip, at);
+        crate::game_lists::start_duty_at(self, &line, &tour, trip, at, false);
         self.chooser = None;
         self.admin_list = None;
         self.list_kind = None;

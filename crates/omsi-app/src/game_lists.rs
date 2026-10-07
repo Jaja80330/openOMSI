@@ -870,7 +870,7 @@ pub(crate) fn run_move(app: &mut App, kind: &ListKind, action: &str, mv: Move) -
             if let Some((line, tour)) = arg.split_once('\u{1}') {
                 let chosen = pick.as_ref().filter(|p| p.0 == tour).map(|p| p.1).unwrap_or(0);
                 let trip = pick.as_ref().filter(|p| p.0 == tour).map(|p| p.2).unwrap_or_else(|| app.schedule.as_ref().map(|s| s.tour_trip_now(line, tour, app.clock.time)).unwrap_or(0));
-                start_duty_at(app, line, tour, trip, chosen);
+                start_duty_at(app, line, tour, trip, chosen, false);
             }
             None
         }
@@ -2759,11 +2759,16 @@ pub(crate) fn tour_choice(app: &App, k: usize) -> Option<(usize, usize, usize, u
 
 /// Start the tour at stop number `chosen` of trip number `trip` of the tour (the trip chosen
 /// by its time): the duty goes on from that stop, the bus stays where it is.
-pub(crate) fn start_duty_at(app: &mut App, line: &str, tour: &str, trip: usize, chosen: usize) {
+///
+/// `typed`: put the trip on the bus's IBIS and roller blind by itself, and go on doing it
+/// from trip to trip. A driver who picks a timetable from the menu sets the displays at the
+/// bus's own controller, as in OMSI 2 (`typed` false; Shift+U and `--autostart` still type
+/// the duty on request); a dispatcher who gives a player a service sets them for them (`typed`).
+pub(crate) fn start_duty_at(app: &mut App, line: &str, tour: &str, trip: usize, chosen: usize, typed: bool) {
     let now = app.clock.time;
     let at = tour_start_of(app, line, tour);
     let Some((k, j)) = app.schedule.as_ref().and_then(|s| s.tour_trip_stops(line, tour, trip).get(chosen).map(|x| (x.0, x.1))) else {
-        return start_duty(app, line, tour);
+        return start_duty(app, line, tour, typed);
     };
     let (Some(w), Some(sch)) = (app.world.clone(), app.schedule.as_mut()) else { return };
     let mut d = match sch.player_duty(&w, line, tour, at, None, false) {
@@ -2777,8 +2782,12 @@ pub(crate) fn start_duty_at(app: &mut App, line: &str, tour: &str, trip: usize, 
     d.start_at_here(k, j);
     if let Some(p) = app.player.as_mut() {
         d.update(&mut p.vehicle, now);
-        let (trip, stop) = d.trip_for_ibis();
-        p.set_duty_destination(trip, stop);
+        if typed {
+            let (trip, stop) = d.trip_for_ibis();
+            p.set_duty_destination(trip, stop);
+        } else {
+            p.duty_typed = false;
+        }
         if let Some(w) = app.world.as_ref() {
             let mut fonts = w.fonts.lock();
             if let Err(e) = crate::schedule_paper::update_vehicle(&mut p.vehicle, &d, &mut fonts) {
@@ -2792,15 +2801,19 @@ pub(crate) fn start_duty_at(app: &mut App, line: &str, tour: &str, trip: usize, 
     app.service_msg = Some((format!("Line {line}, tour {}", tour.trim()), 4.0));
 }
 
-fn start_duty(app: &mut App, line: &str, tour: &str) {
+fn start_duty(app: &mut App, line: &str, tour: &str, typed: bool) {
     let (Some(w), Some(sch)) = (app.world.clone(), app.schedule.as_mut()) else { return };
     let now = app.clock.time;
     match sch.player_duty(&w, line, tour, now, None, false) {
         Ok(mut d) => {
             if let Some(p) = app.player.as_mut() {
                 d.update(&mut p.vehicle, now);
-                let (trip, stop) = d.trip_for_ibis();
-                p.set_duty_destination(trip, stop);
+                if typed {
+                    let (trip, stop) = d.trip_for_ibis();
+                    p.set_duty_destination(trip, stop);
+                } else {
+                    p.duty_typed = false;
+                }
                 let mut fonts = w.fonts.lock();
                 if let Err(e) = crate::schedule_paper::update_vehicle(
                     &mut p.vehicle,

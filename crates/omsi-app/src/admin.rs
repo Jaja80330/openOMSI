@@ -411,7 +411,7 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
                     match stops.iter().position(|s| s.1 >= station).or(stops.len().checked_sub(1)) {
                         None => "duty-no unknown tour or trip".to_string(),
                         Some(chosen) => {
-                            crate::game_lists::start_duty_at(app, &line, &tour, trip, chosen);
+                            crate::game_lists::start_duty_at(app, &line, &tour, trip, chosen, true);
                             let ok = app.duty.as_ref().is_some_and(|d| d.line.eq_ignore_ascii_case(&line) && d.tour.eq_ignore_ascii_case(&tour));
                             log::info!("LAN: the server gave us line {line} tour {tour}, trip {trip} from stop {chosen}: {}", if ok { "taken" } else { "not taken" });
                             if ok {

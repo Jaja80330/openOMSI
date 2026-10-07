@@ -4675,13 +4675,38 @@ impl PlayerDuty {
     pub fn update(&mut self, bus: &mut omsi_sim::VehicleInstance, day_time: f64) -> Option<(f64, f64)> {
         let day_time = self.duty_time(day_time);
         self.heading = bus.heading;
-        let served = self.advance(bus.position, day_time);
+        let mut served = self.advance(bus.position, day_time);
         if self.done
             && self.at_stop
             && bus.physics.velocity_kmh().abs() < 0.36
             && Self::doors_open(bus)
         {
             self.served_terminus = self.trip().stops.last().and_then(|stop| stop.position);
+        }
+        // Stopped at the last stop with a passenger door open: as in OMSI 2 the tour's next
+        // trip begins at once when it starts from this very stop - the bus stands at its
+        // first stop, the IBIS and the timetable show the time left to the departure, and the
+        // people waiting for that trip board. (A next trip that starts elsewhere, or a bus
+        // that never opened a door, goes on as before, below and in `advance`.)
+        if let (Some(terminus), true) = (self.served_terminus, self.trip_index + 1 < self.trips.len()) {
+            let from_here = self.trips[self.trip_index + 1]
+                .stops
+                .first()
+                .and_then(|stop| stop.position)
+                .is_some_and(|start| (start - terminus).length() < AT_STOP);
+            if from_here {
+                // (the old trip's last stop is served now: it will not be left as a stop of it)
+                if served.is_none() {
+                    let last = self.trip().stops.last().map(|stop| (stop.stops, stop.dep));
+                    if let (Some((true, dep)), Some(arrived)) = (last, self.arrived_late.take()) {
+                        served = Some((arrived, day_time - dep));
+                    }
+                }
+                self.set_trip(self.trip_index + 1);
+                // (begun, however early: not placed again, nor skipped as an unbegun trip)
+                self.picked = true;
+                self.advance(bus.position, day_time);
+            }
         }
         // (the next trip starts on leaving the terminus only when it is due within a few
         // minutes: a bus moved to its layover or across to the departure stand well before
@@ -5544,15 +5569,53 @@ pub(crate) mod tests {
         }
     }
 
+    /// The same duty, its second trip starting from another stop than the first one ends at.
+    fn early_departure_duty_elsewhere() -> PlayerDuty {
+        let mut d = early_departure_duty();
+        d.trips[1] = planned(600.0, &[(700.0, 600.0, 600.0), (1000.0, 700.0, 700.0)]);
+        d
+    }
+
+    /// OMSI 2: stopped at the last stop with a passenger door open, the tour's next trip -
+    /// starting from that very stop - is the one under way at once.
     #[test]
-    fn serving_the_terminus_then_leaving_60m_starts_the_next_trip_early() {
+    fn stopping_at_the_terminus_with_a_door_open_starts_the_next_trip_at_once() {
         for door in ["door_0", "PAX_Exit0_Open"] {
             let mut duty = early_departure_duty();
             let mut bus = timetable_test_vehicle_with_door(door);
             bus.position.x = 500.0;
+            duty.update(&mut bus, 140.0);
+            assert_eq!(duty.trip_index, 0, "arriving at the terminus does not end the trip before a door opens");
+            assert!(duty.done);
+            bus.set_var(door, 1.0);
+            // its last stop is served as the old trip's: arrived 60 s early (due 200 s)
+            assert_eq!(duty.update(&mut bus, 150.0), Some((-60.0, -50.0)));
+            assert_eq!((duty.trip_index, duty.next_stop), (1, 0), "the next trip starts from this stop");
+            assert!(duty.at_stop && !duty.done);
+            assert_eq!(duty.delay(150.0), -450.0, "the time left to the departure (600 s)");
+            assert_eq!(bus.host.tt_stops[0].1, 600.0);
+            assert!(duty.take_trip_change());
+            duty.update(&mut bus, 151.0);
+            assert_eq!(duty.trip_index, 1, "advance exactly one trip");
+            assert!(!duty.take_trip_change());
+            // The previous trip's door opening cannot finish the next trip too.
+            bus.position.x = 1000.0;
+            duty.update(&mut bus, 400.0);
+            assert_eq!(duty.trip_index, 1);
+        }
+    }
+
+    /// A next trip that starts from another stop keeps the old rule: the bus has left the
+    /// terminus by 60 m and the trip is due within five minutes.
+    #[test]
+    fn serving_the_terminus_then_leaving_60m_starts_a_next_trip_from_another_stop_early() {
+        for door in ["door_0", "PAX_Exit0_Open"] {
+            let mut duty = early_departure_duty_elsewhere();
+            let mut bus = timetable_test_vehicle_with_door(door);
+            bus.position.x = 500.0;
             bus.set_var(door, 1.0);
             duty.update(&mut bus, 150.0);
-            assert_eq!(duty.trip_index, 0, "opening a door does not depart");
+            assert_eq!(duty.trip_index, 0, "opening a door does not depart: that trip starts elsewhere");
             bus.set_var(door, 0.0);
             bus.set_speed(5.0);
             bus.position.x = 559.9;
@@ -5562,20 +5625,12 @@ pub(crate) mod tests {
             duty.update(&mut bus, 161.0);
             assert_eq!(duty.trip_index, 0, "a trip due in more than five minutes waits (a bus moved to its layover)");
             duty.update(&mut bus, 301.0);
-            assert_eq!((duty.trip_index, duty.next_stop), (1, 1));
-            assert_eq!(bus.host.tt_busstop_index, 1);
+            assert_eq!(duty.trip_index, 1);
             assert_eq!(bus.host.tt_stops[0].1, 600.0);
-            assert_eq!(duty.delay(301.0), -299.0);
             assert!(duty.take_trip_change());
             duty.update(&mut bus, 302.0);
             assert!(!duty.take_trip_change());
             assert_eq!(duty.trip_index, 1, "advance exactly one trip");
-            // The previous trip's door opening cannot finish the next trip too.
-            bus.position.x = 1000.0;
-            duty.update(&mut bus, 400.0);
-            bus.position.x = 1060.0;
-            duty.update(&mut bus, 410.0);
-            assert_eq!(duty.trip_index, 1);
         }
     }
 
@@ -5600,11 +5655,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn waiting_at_the_terminus_still_uses_the_scheduled_changeover() {
+    fn waiting_at_the_terminus_without_a_door_open_uses_the_scheduled_changeover() {
         let mut duty = early_departure_duty();
         let mut bus = timetable_test_vehicle();
         bus.position.x = 500.0;
-        bus.set_var("door_0", 1.0);
         duty.update(&mut bus, 150.0);
         duty.update(&mut bus, 539.0);
         assert_eq!(duty.trip_index, 0);
