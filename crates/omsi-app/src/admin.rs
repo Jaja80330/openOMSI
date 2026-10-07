@@ -538,6 +538,8 @@ pub(crate) fn server_command(lan: &mut LanSession, from: u32, text: &str, adm: &
     match verb {
         // a joining game asks which voice server the session talks on (`voice`)
         "voice?" => lan.command(from, &crate::voice::VoiceServer::command(crate::voice::hosted().as_ref())),
+        // ... and whether its player may take a duty from its own menu (`self-duty on|off`)
+        "self-duty?" => lan.command(from, crate::server::self_duty_command()),
         "auth?" => {
             if adm.password.is_empty() {
                 lan.command(from, "admin-no");
@@ -655,6 +657,22 @@ pub(crate) fn server_command(lan: &mut LanSession, from: u32, text: &str, adm: &
                 "traffic" => {
                     if let Some(o) = TrafficOrder::parse(a) {
                         adm.traffic = Some(o);
+                    }
+                }
+                // the players' own duties: `selfduty on|off` (as server.cfg's `self_duty`),
+                // told to every game in the session at once
+                "selfduty" => {
+                    let on = match a.trim() {
+                        "on" | "1" => Some(true),
+                        "off" | "0" => Some(false),
+                        _ => None,
+                    };
+                    if let Some(on) = on {
+                        crate::server::SERVER_SELF_DUTY.store(on, std::sync::atomic::Ordering::Relaxed);
+                        let ids: Vec<u32> = lan.peers().map(|p| p.pose.id).filter(|id| *id != lan.my_id).collect();
+                        for id in ids {
+                            lan.command(id, crate::server::self_duty_command());
+                        }
                     }
                 }
                 "bringall" => {

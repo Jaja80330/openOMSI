@@ -639,6 +639,8 @@ pub struct Frame<'a> {
     pub clock: Option<&'a omsi_sim::SimClock>,
     /// The timetable tour we drive, `<line>/<tour>` (the host's timetable leaves it to us).
     pub tour: Option<String>,
+    /// Where we are in that duty (a server's control room shows it).
+    pub progress: Option<omsi_net::DutyProgress>,
     /// We are out of the seat, walking about.
     pub walker: Option<omsi_net::Walker>,
     /// We stand or sit in this player's bus: it is drawn from inside.
@@ -1989,6 +1991,8 @@ pub fn my_pose(
         tour: String::new(),
         texts,
         freetex,
+        number: v.number(),
+        progress: None,
         figure: p.driver.as_ref().map(|d| content_relative(&d.human_type().def.path, &args.root)).unwrap_or_default(),
         length: fp.length.max(bb[1]),
         width: bb[0],
@@ -3198,6 +3202,7 @@ pub fn tick(
     }
     let mut mine = my_pose(game, player.as_deref(), args, duty, frame.riders);
     mine.tour = frame.tour.clone().unwrap_or_default();
+    mine.progress = frame.progress.clone();
     mine.walker = frame.walker;
     if lan.role == Role::Host {
         // the tours the others drive are theirs, not the timetable's

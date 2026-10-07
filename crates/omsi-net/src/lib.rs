@@ -33,7 +33,7 @@
 //! DISCOVER|<proto>                               broadcast, client → any host
 //! HERE|<proto>|<host name>|<session>|<map>|<players>
 //!                                                host → client
-//! INFO|<id>|<name>|<bus>|<paint>|<line>|<destination>|length|width|box offset|<table>|<tour>|<display texts, hex, comma separated>|<figure .hum>
+//! INFO|<id>|<name>|<bus>|<paint>|<line>|<destination>|length|width|box offset|<table>|<tour>|<display texts, hex, comma separated>|<figure .hum>|<pictures>|<fleet number>|<duty progress>
 //!                                                every two seconds and on a change; relayed
 //! PLACE|<id>|x|y|z|heading|length|width          client → host, once its bus stands
 //! NEAR|<id>|<footprints>                         host → client
@@ -863,6 +863,11 @@ pub struct Pose {
     /// The player's own figure (`.hum` relative to its content root), for the driver at the
     /// wheel and the walker the others draw (empty: they pick one of the map's drivers).
     pub figure: String,
+    /// The vehicle's fleet number (its script's `number`), empty for none.
+    pub number: String,
+    /// Where the player is in its duty, as its own game counts it (none: no duty): what a
+    /// server's control room shows of the player's trip and delay.
+    pub progress: Option<DutyProgress>,
     /// Length and width (m) of the box around the whole vehicle (rear sections included),
     /// and how far its centre lies ahead of the vehicle's origin (negative: behind).
     pub length: f32,
@@ -930,6 +935,39 @@ pub struct Walker {
     pub aboard: Option<Aboard>,
 }
 
+/// Where a player is in its duty (`INFO`): the trip under way - its name and when it leaves
+/// (seconds of the day) - the stop it stands at or drives to (its place among the trip's
+/// stations), and how late it runs as the player's IBIS says it (s, negative: early).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DutyProgress {
+    pub trip: String,
+    pub departure: u32,
+    pub stop: u32,
+    pub at_stop: bool,
+    /// The trip has reached its terminus (the delay is then the next trip's).
+    pub done: bool,
+    pub delay: i32,
+}
+
+impl DutyProgress {
+    /// As an `INFO` field: `departure,stop,flags,delay,trip` (the delay to 5 s: the field
+    /// changes, and the `INFO` goes, no more than every few seconds).
+    pub fn encode(&self) -> String {
+        let flags = self.at_stop as u8 | (self.done as u8) << 1;
+        let delay = (self.delay as f32 / 5.0).round() as i32 * 5;
+        format!("{},{},{flags},{delay},{}", self.departure.min(2 * 86400), self.stop.min(9999), clean_text(&self.trip, MAX_FIELD))
+    }
+
+    pub fn decode(s: &str) -> Option<DutyProgress> {
+        let mut it = s.splitn(5, ',');
+        let departure = it.next()?.trim().parse::<u32>().ok().filter(|d| *d <= 2 * 86400)?;
+        let stop = it.next()?.trim().parse::<u32>().ok().filter(|s| *s <= 9999)?;
+        let flags = it.next()?.trim().parse::<u8>().ok()?;
+        let delay = it.next()?.trim().parse::<i32>().ok().filter(|d| d.abs() <= 86400)?;
+        Some(DutyProgress { trip: clean_text(it.next().unwrap_or(""), MAX_FIELD), departure, stop, at_stop: flags & 1 != 0, done: flags & 2 != 0, delay })
+    }
+}
+
 /// Where a walker is in a player's bus.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Aboard {
@@ -961,15 +999,17 @@ impl Pose {
             clean_text(&self.tour, MAX_FIELD),
         );
         let figure = human_path(&self.figure).unwrap_or_default();
+        // the fleet number and the duty after the pictures (an older game reads the fields
+        // it knows and passes these by); their room is kept from the texts'
+        let tail = format!("|{}|{}", clean_text(&self.number, 16), self.progress.as_ref().map(DutyProgress::encode).unwrap_or_default());
         // the display texts get what room is left in one datagram (long vehicle and figure
         // paths and a destination in another alphabet made an INFO too long to be taken in:
         // the others never learnt which bus the player drove)
-        let room = MAX_DATAGRAM.saturating_sub(head.len() + figure.len() + 1);
+        let room = MAX_DATAGRAM.saturating_sub(head.len() + figure.len() + 1 + tail.len());
         let info = format!("{head}{}|{figure}", encode_texts(&self.texts, MAX_TEXTS, MAX_TEXT_LEN, room));
-        // the `[matl_freetex]` pictures last, in what room is left (an older game reads the
-        // fields it knows and passes this one by)
-        let room = MAX_DATAGRAM.saturating_sub(info.len() + 1);
-        format!("{info}|{}", encode_texts(&self.freetex, MAX_FREETEX, MAX_FREETEX_LEN, room))
+        // the `[matl_freetex]` pictures, in what room is left
+        let room = MAX_DATAGRAM.saturating_sub(info.len() + 1 + tail.len());
+        format!("{info}|{}{tail}", encode_texts(&self.freetex, MAX_FREETEX, MAX_FREETEX_LEN, room))
     }
 
     /// The info fields of an `INFO` message (checked and cleaned), or None.
@@ -999,6 +1039,8 @@ impl Pose {
             texts: parts.get(12).map(|t| decode_texts(t, MAX_TEXTS, MAX_TEXT_LEN)).unwrap_or_default(),
             figure: parts.get(13).and_then(|f| human_path(f)).unwrap_or_default(),
             freetex: parts.get(14).map(|t| decode_texts(t, MAX_FREETEX, MAX_FREETEX_LEN)).unwrap_or_default(),
+            number: parts.get(15).map(|t| clean_text(t, 16)).unwrap_or_default(),
+            progress: parts.get(16).and_then(|t| DutyProgress::decode(t)),
             ..Default::default()
         })
     }
@@ -1014,6 +1056,8 @@ impl Pose {
         self.texts = info.texts.clone();
         self.freetex = info.freetex.clone();
         self.figure = info.figure.clone();
+        self.number = info.number.clone();
+        self.progress = info.progress.clone();
         self.length = info.length;
         self.width = info.width;
         self.box_offset = info.box_offset;
@@ -1034,6 +1078,8 @@ impl Pose {
             texts: keep.texts,
             freetex: keep.freetex,
             figure: keep.figure,
+            number: keep.number,
+            progress: keep.progress,
             length: keep.length,
             width: keep.width,
             box_offset: keep.box_offset,

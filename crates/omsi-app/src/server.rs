@@ -59,6 +59,12 @@ pub(crate) struct ServerCfg {
     pub join_key: Option<Vec<u8>>,
     pub join_login: String,
     pub join_message: String,
+    /// The players may take a duty from their own menu (`self_duty`); otherwise only the
+    /// dispatcher gives them one (`duty`, see `admin`).
+    pub self_duty: bool,
+    /// The welcome shown to a player who joins (Markdown, `welcome`; read at each request,
+    /// see `omsi_net::ws::welcome_text`).
+    pub welcome_file: std::path::PathBuf,
 }
 
 pub(crate) const DEFAULT_CFG: &str = "\
@@ -128,6 +134,15 @@ join_key =
 join_login =
 join_message =
 
+# the players may take a duty (line, tour, trip) from their own menu (1); 0: only the
+# dispatcher gives them one (the admin command duty, a control room's tool)
+self_duty = 1
+
+# a welcome shown to each player who joins, in the middle of the screen with a Play button
+# (a Markdown file beside this one; no such file or an empty one: no welcome). It is read
+# again for each player: change it while the server runs
+welcome = welcome.md
+
 # only games with these features get in (separated by commas): radio - the dispatch radio
 # (a game that does not have it is turned away and shown require_message; empty: any game)
 require =
@@ -195,6 +210,8 @@ impl ServerCfg {
             join_key: kv.get("join_key").and_then(|k| omsi_net::login::key_of(k)),
             join_login: get("join_login", ""),
             join_message: get("join_message", ""),
+            self_duty: flag("self_duty", true),
+            welcome_file: dir.join(get("welcome", "welcome.md")),
         })
     }
 }
@@ -218,6 +235,7 @@ pub(crate) fn info_of(cfg: &ServerCfg) -> omsi_net::ws::ServerInfo {
         player_list: Vec::new(),
         local_admin_password: cfg.admin_password.clone(),
         login: if cfg.join_key.is_some() { cfg.join_login.clone() } else { String::new() },
+        welcome_file: Some(cfg.welcome_file.clone()),
         ..Default::default()
     }
 }
@@ -233,6 +251,7 @@ pub(crate) fn prepare(args: &mut Args, path: &Path) -> Result<ServerCfg> {
     let _ = SERVER_VOICE.set(cfg.voice.clone());
     let _ = SERVER_REQUIRE.set((cfg.require.clone(), cfg.require_message.clone()));
     let _ = SERVER_LOGIN.set(cfg.join_key.clone().map(|k| (k, cfg.join_message.clone())));
+    SERVER_SELF_DUTY.store(cfg.self_duty, std::sync::atomic::Ordering::Relaxed);
     args.map = cfg.map.clone();
     args.time = cfg.time.clone();
     if let Some(d) = &cfg.date {
@@ -266,6 +285,19 @@ pub(crate) fn prepare(args: &mut Args, path: &Path) -> Result<ServerCfg> {
     }
     log::info!("server '{}': map {}, {} at {}, traffic {}, timetable {}, passengers {}, UDP {} / web {}, at most {} players", cfg.name, cfg.map, cfg.date.as_deref().unwrap_or("today"), cfg.time, cfg.traffic, cfg.timetable, cfg.passengers, cfg.port, cfg.web_port, cfg.max_players);
     Ok(cfg)
+}
+
+/// The players of a dedicated server may take a duty from their own menu (`self_duty`; an
+/// admin's `selfduty on|off` changes it while the server runs).
+pub(crate) static SERVER_SELF_DUTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// What a dedicated server tells a game about taking duties (`self-duty on|off`).
+pub(crate) fn self_duty_command() -> &'static str {
+    if SERVER_SELF_DUTY.load(std::sync::atomic::Ordering::Relaxed) {
+        "self-duty on"
+    } else {
+        "self-duty off"
+    }
 }
 
 /// The airport whose METAR report a dedicated server's weather follows (None: no METAR sync).
@@ -340,9 +372,11 @@ pub(crate) fn player_info<'a>(q: &omsi_net::Pose, pose_of: impl Fn(u32) -> Optio
         name: q.name.clone(),
         // (what a player on foot last drove is not what it drives)
         bus: if driving { q.bus.clone() } else { String::new() },
+        number: if driving { q.number.clone() } else { String::new() },
         line: if driving { q.line.clone() } else { String::new() },
         destination: if driving { q.destination.clone() } else { String::new() },
         tour: q.tour.clone(),
+        progress: q.progress.clone(),
         x,
         y,
         heading,

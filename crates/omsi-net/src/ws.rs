@@ -61,6 +61,23 @@ pub struct ServerInfo {
     pub local_admin_failures: Vec<Instant>,
     /// A dedicated server's shared world now (`"world"` in `GET /status`); none elsewhere.
     pub world: Option<WorldCounts>,
+    /// The server's welcome (Markdown) for `GET /welcome`, read from this file at each
+    /// request: a tool beside the server changes it without a restart. None, or no such
+    /// file, or an empty one: no welcome (404).
+    pub welcome_file: Option<std::path::PathBuf>,
+}
+
+/// The longest welcome served (bytes).
+pub const MAX_WELCOME: u64 = 64 * 1024;
+
+/// `GET /welcome`: the server's welcome text, if it has one.
+pub fn welcome_text(file: Option<&std::path::Path>) -> Option<String> {
+    let mut f = std::fs::File::open(file?).ok()?;
+    let mut body = Vec::new();
+    Read::read_to_end(&mut Read::take(&mut f, MAX_WELCOME), &mut body).ok()?;
+    let text = String::from_utf8_lossy(&body).replace("\r\n", "\n");
+    let text = text.trim_start_matches('\u{feff}').trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// What a dedicated server's shared world holds: the AI cars on the roads (`cars`), its
@@ -95,10 +112,14 @@ pub struct PlayerInfo {
     pub name: String,
     /// Vehicle file (`Vehicles/…/….bus`), empty for a player on foot.
     pub bus: String,
+    /// Its fleet number (empty: none said).
+    pub number: String,
     pub line: String,
     pub destination: String,
     /// The timetable tour, `<line>/<tour>` (empty for none).
     pub tour: String,
+    /// Where the player is in that tour, as its game says (none: an older game, no duty).
+    pub progress: Option<crate::DutyProgress>,
     /// World metres (x east, y north) and heading (degrees, clockwise from north): the bus
     /// driven, or the player on foot, or the bus the player sits in.
     pub x: f64,
@@ -119,14 +140,28 @@ impl PlayerInfo {
             Some((a, o)) => (num(a, 6), num(o, 6)),
             None => ("null".into(), "null".into()),
         };
+        let progress = match &self.progress {
+            Some(p) => format!(
+                "{{\"trip\":{},\"departure\":{},\"stop\":{},\"at_stop\":{},\"done\":{},\"delay_s\":{}}}",
+                json_str(&p.trip),
+                p.departure,
+                p.stop,
+                p.at_stop,
+                p.done,
+                p.delay
+            ),
+            None => "null".into(),
+        };
         format!(
-            "{{\"id\":{},\"name\":{},\"bus\":{},\"line\":{},\"destination\":{},\"tour\":{},\"x\":{},\"y\":{},\"heading\":{},\"speed_kmh\":{},\"on_foot\":{},\"aboard\":{},\"lat\":{},\"lon\":{}}}",
+            "{{\"id\":{},\"name\":{},\"bus\":{},\"number\":{},\"line\":{},\"destination\":{},\"tour\":{},\"progress\":{},\"x\":{},\"y\":{},\"heading\":{},\"speed_kmh\":{},\"on_foot\":{},\"aboard\":{},\"lat\":{},\"lon\":{}}}",
             self.id,
             json_str(&self.name),
             json_str(&self.bus),
+            json_str(&self.number),
             json_str(&self.line),
             json_str(&self.destination),
             json_str(&self.tour),
+            progress,
             num(self.x, 1),
             num(self.y, 1),
             num(self.heading as f64, 1),
@@ -544,6 +579,13 @@ fn serve(stream: TcpStream, target: SocketAddr, info: &Mutex<ServerInfo>, stop: 
                 }
             }
             p if p == "/ttdata" || p.starts_with("/ttdata/") => crate::ttdata::answer(p),
+            "/welcome" | "/welcome.md" => {
+                let file = info.lock().unwrap_or_else(|e| e.into_inner()).welcome_file.clone();
+                match welcome_text(file.as_deref()) {
+                    Some(t) => ("200 OK", "text/markdown; charset=utf-8", t.into_bytes()),
+                    None => ("404 Not Found", "text/plain", b"no welcome".to_vec()),
+                }
+            }
             "/icon.png" => {
                 let icon = info.lock().unwrap_or_else(|e| e.into_inner()).icon.clone();
                 if icon.is_empty() {
@@ -1085,6 +1127,18 @@ mod tests {
     }
 
     #[test]
+    fn the_welcome_is_read_at_each_request() {
+        let f = std::env::temp_dir().join(format!("omsi-welcome-{}.md", std::process::id()));
+        assert_eq!(welcome_text(None), None);
+        assert_eq!(welcome_text(Some(&f)), None);
+        std::fs::write(&f, "\u{feff}# Bonjour\r\n\r\nBon **service** !\r\n").unwrap();
+        assert_eq!(welcome_text(Some(&f)).as_deref(), Some("# Bonjour\n\nBon **service** !"));
+        std::fs::write(&f, "  \n").unwrap();
+        assert_eq!(welcome_text(Some(&f)), None);
+        let _ = std::fs::remove_file(&f);
+    }
+
+    #[test]
     fn players_list() {
         let p = PlayerInfo { id: 3, name: "Anna \"A\"".into(), bus: "Vehicles/MAN_SD200/MAN_SD77.bus".into(), line: "37".into(), x: 894179.74, y: 4196165.3, heading: 200.0, speed_kmh: 31.25, lat_lon: Some((52.535412, 13.199642)), ..Default::default() };
         let j = players_json(&[p.clone(), PlayerInfo { id: 4, x: f64::NAN, ..Default::default() }]);
@@ -1094,6 +1148,12 @@ mod tests {
         assert!(j.contains("\"on_foot\":false,\"aboard\":null,\"lat\":52.535412,\"lon\":13.199642}"), "{j}");
         assert!(j.contains("\"id\":4,") && j.contains("\"x\":null") && j.ends_with("\"lat\":null,\"lon\":null}]"), "{j}");
         assert_eq!(players_json(&[]), "[]");
+        // the fleet number and the duty as the player's game says them
+        let d = PlayerInfo { number: "4521".into(), tour: "37/2".into(), progress: Some(crate::DutyProgress { trip: "37_Hbf".into(), departure: 29520, stop: 3, at_stop: false, done: false, delay: 125 }), ..p };
+        let j = players_json(&[d]);
+        assert!(j.contains("\"number\":\"4521\""), "{j}");
+        assert!(j.contains("\"progress\":{\"trip\":\"37_Hbf\",\"departure\":29520,\"stop\":3,\"at_stop\":false,\"done\":false,\"delay_s\":125}"), "{j}");
+        assert!(players_json(&[PlayerInfo::default()]).contains("\"progress\":null"));
     }
 
     #[test]

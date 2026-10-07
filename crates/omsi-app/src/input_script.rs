@@ -656,6 +656,7 @@ impl App {
             riders: self.humans.as_ref().map(|h| h.riding()).unwrap_or(0),
             clock: Some(&self.clock),
             tour: self.duty.as_ref().map(|d| format!("{}/{}", d.line, d.tour)),
+            progress: self.duty.as_ref().map(|d| d.progress(self.clock.time)),
             walker,
             inside_of: self.inside_remote,
         };

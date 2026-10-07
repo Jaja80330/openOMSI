@@ -77,8 +77,8 @@ fn info_carries_the_freetex_pictures_and_an_older_info_has_none() {
     assert_eq!(q.freetex, p.freetex);
     assert_eq!(q.texts, p.texts);
     // an older game's INFO ends with the figure: no pictures, everything else as before
-    let older = text.rsplit_once('|').unwrap().0;
-    let q = Pose::decode_info(&older.split('|').collect::<Vec<_>>()).unwrap();
+    let older: Vec<&str> = text.split('|').take(14).collect();
+    let q = Pose::decode_info(&older).unwrap();
     assert!(q.freetex.is_empty());
     assert_eq!(q.texts, p.texts);
     // and with everything else at its longest the INFO still fits one datagram
@@ -86,6 +86,45 @@ fn info_carries_the_freetex_pictures_and_an_older_info_has_none() {
     p.bus = format!("Vehicles/{}/{}.bus", "Ü".repeat(60), "b".repeat(120));
     p.texts = (0..MAX_TEXTS).map(|k| format!("{k}ß{}", "ñ".repeat(40))).collect();
     assert!(p.encode_info().len() <= MAX_DATAGRAM);
+}
+
+#[test]
+fn info_carries_the_fleet_number_and_the_duty_and_an_older_info_has_neither() {
+    let mut p = pose(1.5);
+    p.tour = "EXPRESS 91.06/06-536".into();
+    p.number = "4521".into();
+    p.progress = Some(DutyProgress { trip: "9106C_AMHP_MASSY".into(), departure: 8 * 3600 + 12 * 60, stop: 7, at_stop: true, done: false, delay: -62 });
+    p.freetex = vec![r"..\..\Anzeigen\x.tga".into()];
+    let text = p.encode_info();
+    let q = Pose::decode_info(&text.split('|').collect::<Vec<_>>()).unwrap();
+    assert_eq!(q.number, "4521");
+    let d = q.progress.clone().unwrap();
+    assert_eq!((d.trip.as_str(), d.departure, d.stop, d.at_stop, d.done), ("9106C_AMHP_MASSY", 29520, 7, true, false));
+    // (to 5 s)
+    assert_eq!(d.delay, -60);
+    assert_eq!(q.freetex, p.freetex);
+    // an older game's INFO: neither
+    let older: Vec<&str> = text.split('|').take(15).collect();
+    let q = Pose::decode_info(&older).unwrap();
+    assert!(q.number.is_empty() && q.progress.is_none());
+    assert_eq!(q.freetex, p.freetex);
+    // no duty: an empty field
+    p.progress = None;
+    let q = Pose::decode_info(&p.encode_info().split('|').collect::<Vec<_>>()).unwrap();
+    assert!(q.progress.is_none());
+    // nonsense is no duty
+    assert!(DutyProgress::decode("x,1,0,0,a").is_none());
+    assert!(DutyProgress::decode("1,2,0").is_none());
+    // and with everything else at its longest, the INFO fits one datagram with both
+    p.progress = Some(DutyProgress { trip: "é".repeat(80), departure: 86399, stop: 9999, at_stop: true, done: true, delay: -86400 });
+    p.number = "9".repeat(40);
+    p.freetex = (0..MAX_FREETEX).map(|k| format!("{k}{}", "é".repeat(200))).collect();
+    p.bus = format!("Vehicles/{}/{}.bus", "Ü".repeat(60), "b".repeat(120));
+    p.texts = (0..MAX_TEXTS).map(|k| format!("{k}ß{}", "ñ".repeat(40))).collect();
+    let text = p.encode_info();
+    assert!(text.len() <= MAX_DATAGRAM, "{} bytes", text.len());
+    let q = Pose::decode_info(&text.split('|').collect::<Vec<_>>()).unwrap();
+    assert!(q.progress.is_some());
 }
 
 #[test]

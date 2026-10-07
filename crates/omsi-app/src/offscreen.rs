@@ -1111,6 +1111,7 @@ pub(crate) fn run_offscreen(
                 riders: humans_off.as_ref().map(|h| h.riding()).unwrap_or(0),
                 clock,
                 tour: duty.as_ref().map(|d| format!("{}/{}", d.line, d.tour)),
+                progress: duty.as_ref().map(|d| d.progress(now.time)),
                 walker: None,
                 inside_of: None,
             };

@@ -4634,6 +4634,20 @@ impl PlayerDuty {
         self.picked = false;
     }
 
+    /// Where the duty is, for the server the game plays on (`omsi_net::DutyProgress`): the
+    /// trip under way, the stop the bus stands at or drives to, and the delay the IBIS shows.
+    pub fn progress(&self, now: f64) -> omsi_net::DutyProgress {
+        let t = self.trip();
+        omsi_net::DutyProgress {
+            trip: t.name.clone(),
+            departure: t.departure.rem_euclid(DAY).round() as u32,
+            stop: self.next_stop.min(t.stops.len().saturating_sub(1)) as u32,
+            at_stop: self.at_stop,
+            done: self.done,
+            delay: self.delay(now).round().clamp(-86400.0, 86400.0) as i32,
+        }
+    }
+
     /// How late the bus is (s; negative = early), as the IBIS shows it: at a stop against
     /// its departure there, on the way at least as late as it left the last stop and later
     /// once the next one is overdue, and at the end of a trip against the next trip's start.
