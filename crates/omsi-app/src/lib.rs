@@ -108,6 +108,7 @@ mod startup;
 mod traffic_link;
 mod tutorial;
 mod weather_setup;
+mod welcome;
 mod weather_cycle;
 mod weather_model;
 mod world_load;
@@ -558,6 +559,9 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         steam: None,
         voice: None,
         phonie: None,
+        self_duty: None,
+        self_duty_ask: 0.0,
+        welcome: None,
         headtrack: None,
         headtrack_failed: None,
         controllers: None,

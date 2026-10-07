@@ -2765,6 +2765,10 @@ pub(crate) fn tour_choice(app: &App, k: usize) -> Option<(usize, usize, usize, u
 /// bus's own controller, as in OMSI 2 (`typed` false; Shift+U and `--autostart` still type
 /// the duty on request); a dispatcher who gives a player a service sets them for them (`typed`).
 pub(crate) fn start_duty_at(app: &mut App, line: &str, tour: &str, trip: usize, chosen: usize, typed: bool) {
+    // (a duty the player picks; the dispatcher's, `typed`, is given whatever the server says)
+    if !typed && app.self_duty_refused() {
+        return;
+    }
     let now = app.clock.time;
     let at = tour_start_of(app, line, tour);
     let Some((k, j)) = app.schedule.as_ref().and_then(|s| s.tour_trip_stops(line, tour, trip).get(chosen).map(|x| (x.0, x.1))) else {

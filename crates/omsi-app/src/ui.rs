@@ -58,12 +58,17 @@ impl TextCache {
     /// The texture of `text` at `px` pixels in `color` (alpha = opacity of the outline), and
     /// its size.
     fn label(&mut self, r: &Renderer, scene: &mut Scene, text: &str, px: u32, color: [u8; 4]) -> Label {
-        let color = [color[0], color[1], color[2], outline_for(color, if self.flat { 1.0 } else { self.backdrop })];
-        // (in the interface's language: the menu, the notes, the windows; a letter and its
-        // combining mark as one, as macOS gives file names - the weather "Eiseska\u{308}lte"
-        // showed a box after its "a" in the menu's list)
+        // (in the interface's language: the menu, the notes, the windows)
         let text = omsi_ui::tr(text);
-        let text = &*omsi_ui::text::composed(&text);
+        self.label_raw(r, scene, &text, px, color)
+    }
+
+    /// `label` of a text as it is, not translated (a server's welcome).
+    fn label_raw(&mut self, r: &Renderer, scene: &mut Scene, text: &str, px: u32, color: [u8; 4]) -> Label {
+        let color = [color[0], color[1], color[2], outline_for(color, if self.flat { 1.0 } else { self.backdrop })];
+        // (a letter and its combining mark as one, as macOS gives file names - the weather
+        // "Eiseska\u{308}lte" showed a box after its "a" in the menu's list)
+        let text = &*omsi_ui::text::composed(text);
         let key = (text.to_string(), px, color);
         if let Some(l) = self.labels.get_mut(&key) {
             l.used = self.frame;
@@ -463,6 +468,8 @@ pub struct Frame<'a> {
     pub notice_anchor: Option<[f32; 4]>,
     /// The dispatch radio (`phonie`), when the server runs one: its button and the call.
     pub radio: Option<crate::phonie::RadioHud>,
+    /// The server's welcome (its blocks) and how far it is scrolled (px).
+    pub welcome: Option<(&'a [crate::welcome::Block], f32)>,
     /// What kind of menu the lines belong to.
     pub menu_kind: MenuKind,
     /// The open list's title and the small line above it (the line a tour list is of).
@@ -542,6 +549,12 @@ pub struct Ui {
     /// The dispatch radio's button (a request to be called), and whether the mouse is on it.
     pub radio_button: Option<[f32; 4]>,
     pub radio_hovered: bool,
+    /// The welcome window this frame: its Play button under the mouse, its scroll bar's
+    /// track, how far it scrolls at most and how high its text's view is (px).
+    pub welcome_button_hovered: bool,
+    pub welcome_track: Option<[f32; 4]>,
+    pub welcome_max: f32,
+    pub welcome_view: f32,
     /// The loading screen's bar as shown (it eases to the progress), and when it was drawn.
     load_shown: f32,
     load_last: Option<std::time::Instant>,
@@ -639,7 +652,7 @@ impl Ui {
         self.chat.rect[2] += x;
     }
     pub fn new() -> Option<Ui> {
-        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, load_shown: 0.0, load_last: None })
+        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, welcome_button_hovered: false, welcome_track: None, welcome_max: 0.0, welcome_view: 0.0, load_shown: 0.0, load_last: None })
     }
 
     /// Draw the frame's interface: its overlays go after the HUD's in `scene.overlays`.
@@ -959,6 +972,8 @@ impl Ui {
         self.anim_dt = dt.clamp(0.0, 0.1);
         self.text.flat = true;
         self.draw_menu(r, scene, f);
+        // --- the server's welcome, over everything
+        self.draw_welcome(r, scene, f, s);
         self.text.flat = false;
         // --- the mouse-over name, right of the cursor
         self.vr_tooltip_overlay = None;
@@ -1498,6 +1513,110 @@ impl Ui {
             Some(a) => [a[0], a[1], a[2], top + h],
             None => [nav[0], top, nav[2], top + h],
         })
+    }
+
+    /// The server's welcome: a window in the middle over a dimmed picture, its text scrolled
+    /// within it, a scroll bar when it is longer, and the Play button that closes it.
+    fn draw_welcome(&mut self, r: &Renderer, scene: &mut Scene, f: &Frame, s: f32) {
+        self.welcome_button_hovered = false;
+        self.welcome_track = None;
+        let Some((blocks, scroll)) = f.welcome else {
+            self.welcome_max = 0.0;
+            return;
+        };
+        use crate::welcome::{Deco, Tone};
+        let pad = 26.0 * s;
+        let w = (780.0 * s).min(f.width - 32.0 * s).max(200.0 * s);
+        let foot = 74.0 * s;
+        let body = (16.0 * s).round();
+        let text_w = w - pad * 2.0 - 14.0 * s;
+        let (lines, content_h) = {
+            let tc = &self.text;
+            let measure = |t: &str, bold: bool, px: f32| if bold { tc.width_in(&tc.bold, t, px) } else { tc.width_raw(t, px) };
+            crate::welcome::layout(blocks, text_w, body, &measure)
+        };
+        let max_h = (f.height - 48.0 * s).max(160.0 * s);
+        let h = (content_h + pad * 2.0 + foot).min(max_h).max(180.0 * s);
+        let view_h = h - pad * 2.0 - foot;
+        let max = (content_h - view_h).max(0.0);
+        self.welcome_max = max;
+        self.welcome_view = view_h;
+        let scroll = scroll.clamp(0.0, max);
+        let x0 = ((f.width - w) * 0.5).round();
+        let y0 = ((f.height - h) * 0.5).round();
+        // the picture dimmed behind, the window with its shadow
+        let dim = self.text.plate(r, scene, 6);
+        scene.overlays.push((dim, [0.0, 0.0, f.width, f.height]));
+        self.text.shadow(r, scene, [x0, y0, x0 + w, y0 + h], 14.0 * s, 28.0 * s, 8.0 * s, 150);
+        self.text.rounded(r, scene, [x0, y0, x0 + w, y0 + h], 14.0 * s, [24, 26, 31, 250]);
+        let top = y0 + pad;
+        let left = x0 + pad;
+        let bottom = top + view_h;
+        // the lines in view (whole ones: the overlays have no clipping)
+        for l in &lines {
+            let y = top + l.y - scroll;
+            if y < top - 0.5 || y + l.h > bottom + 0.5 {
+                continue;
+            }
+            match l.deco {
+                Deco::Rule => {
+                    let line = self.text.solid(r, scene, [255, 255, 255, 40]);
+                    let my = (y + l.h * 0.5).round();
+                    scene.overlays.push((line, [left, my, left + text_w, my + (1.0 * s).max(1.0)]));
+                }
+                Deco::Quote => {
+                    let bar = self.text.solid(r, scene, [232, 160, 48, 200]);
+                    scene.overlays.push((bar, [left, y, left + 3.0 * s, y + l.h]));
+                }
+                Deco::Code => {
+                    let bg = self.text.solid(r, scene, [255, 255, 255, 14]);
+                    scene.overlays.push((bg, [left, y, left + text_w, y + l.h]));
+                }
+                Deco::None => {}
+            }
+            for run in &l.runs {
+                let color = match run.tone {
+                    Tone::Body => [226, 229, 234, 0],
+                    Tone::Heading => [255, 255, 255, 0],
+                    Tone::Muted => [165, 171, 182, 0],
+                    Tone::Link => [120, 175, 255, 0],
+                    Tone::Code => [236, 196, 132, 0],
+                };
+                let px = run.px.round() as u32 | if run.bold { BOLD } else { 0 };
+                let lb = self.text.label_raw(r, scene, run.text.trim_end(), px, color);
+                let ty = (y + (l.h - lb.h as f32) * 0.5).round();
+                let tx = (left + run.x).round();
+                if run.plate {
+                    let bg = self.text.solid(r, scene, [255, 255, 255, 22]);
+                    scene.overlays.push((bg, [tx - 2.0 * s, y + 2.0 * s, tx + lb.w as f32 + 2.0 * s, y + l.h - 2.0 * s]));
+                }
+                scene.overlays.push((lb.tex, [tx, ty, tx + lb.w as f32, ty + lb.h as f32]));
+            }
+        }
+        // the scroll bar
+        if max > 0.0 {
+            let tx = x0 + w - pad * 0.5 - 4.0 * s;
+            let track = [tx, top, tx + 4.0 * s, bottom];
+            self.text.rounded(r, scene, track, 2.0 * s, [255, 255, 255, 24]);
+            let th = (view_h * view_h / content_h).max(28.0 * s).min(view_h);
+            let ty = top + (view_h - th) * (scroll / max);
+            self.text.rounded(r, scene, [tx, ty, tx + 4.0 * s, ty + th], 2.0 * s, [255, 255, 255, 120]);
+            self.welcome_track = Some(track);
+        }
+        // the foot: a hairline and the Play button
+        let line = self.text.solid(r, scene, [255, 255, 255, 18]);
+        let fy = y0 + h - foot;
+        scene.overlays.push((line, [x0 + 1.0, fy, x0 + w - 1.0, fy + (1.0 * s).max(1.0)]));
+        let (bw, bh) = (200.0 * s, 44.0 * s);
+        let bx = (x0 + (w - bw) * 0.5).round();
+        let by = (fy + (foot - bh) * 0.5).round();
+        let over = f.cursor.0 >= bx && f.cursor.0 <= bx + bw && f.cursor.1 >= by && f.cursor.1 <= by + bh;
+        self.welcome_button_hovered = over;
+        let fill = if over { [244, 176, 66, 255] } else { [232, 160, 48, 255] };
+        self.text.rounded(r, scene, [bx, by, bx + bw, by + bh], 8.0 * s, fill);
+        let l = self.text.label(r, scene, "Play", (17.0 * s) as u32 | BOLD, [24, 20, 14, 255]);
+        let (lx, ly) = ((bx + (bw - l.w as f32) * 0.5).round(), (by + (bh - l.h as f32) * 0.5).round());
+        scene.overlays.push((l.tex, [lx, ly, lx + l.w as f32, ly + l.h as f32]));
     }
 
     /// One of the radio button's handsets (`assets/icons/custom`), white, drawn once.

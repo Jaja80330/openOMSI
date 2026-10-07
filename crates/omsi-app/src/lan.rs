@@ -1224,6 +1224,8 @@ pub fn share_mods(args: &mut Args, lan: &mut LanSession) {
                     Ok(r) => log::info!("timetable: the server's timetable {} ({} files, {} fetched)", r.version, r.files, r.fetched),
                     Err(e) => log::info!("timetable: playing with this game's own timetable ({e})"),
                 }
+                // and its welcome, shown once the world is there
+                crate::welcome::fetch_any(&bases);
             }
             note(lan, "Host's mods: looking what is needed…".into());
             // the host's TCP port is not always reachable (a router forwards the UDP session

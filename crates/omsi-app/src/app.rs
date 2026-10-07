@@ -182,6 +182,13 @@ pub(crate) struct App {
     /// The dispatch radio of a dedicated server (`phonie`), made when the server first says
     /// where ours stands.
     pub(crate) phonie: Option<crate::phonie::Radio>,
+    /// What the dedicated server joined says about the players taking a duty from their own
+    /// menu (`self-duty on|off`; None: not said, as anywhere else - they may).
+    pub(crate) self_duty: Option<bool>,
+    /// Seconds before the server is asked again.
+    pub(crate) self_duty_ask: f32,
+    /// The server's welcome, shown over the game until its Play button (`welcome`).
+    pub(crate) welcome: Option<crate::welcome::Welcome>,
     /// Head tracking (Settings → head tracking), started with the first frame that wants it.
     pub(crate) headtrack: Option<crate::headtrack::HeadTracker>,
     /// When head tracking last failed to start (tried again a few seconds later).

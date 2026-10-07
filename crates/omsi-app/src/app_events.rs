@@ -2382,6 +2382,7 @@ impl ApplicationHandler for App {
                             notices: &self.notices,
                             notice_anchor: self.navigator.as_ref().and_then(|n| n.screen_rect()),
                             radio: self.phonie.as_ref().and_then(|r| r.hud()),
+                            welcome: self.welcome.as_ref().map(|w| (w.blocks.as_slice(), w.scroll)),
                         };
                         ui.draw_at(r, scene, &frame, dt, hud[0]);
                     }
@@ -3029,6 +3030,14 @@ impl App {
     /// The mouse wheel (or a pinch of two fingers): `amount` notches, up positive.
     pub(crate) fn wheel(&mut self, amount: f32) {
         if self.vr_nav_edit.is_some() { self.vr_nav_scroll(amount); return; }
+        // the server's welcome scrolls (and nothing behind it)
+        if self.welcome.is_some() {
+            let max = self.ui.as_ref().map(|u| u.welcome_max).unwrap_or(0.0);
+            if let Some(w) = self.welcome.as_mut() {
+                w.scroll = (w.scroll - amount * 60.0).clamp(0.0, max);
+            }
+            return;
+        }
         // over a mirror panel the wheel resizes it (Shift: wider or narrower)
         if let Some(size) = self.mirror_hud_size() {
             let shift =

@@ -57,6 +57,33 @@ impl App {
 
     /// A key of the window, or of an `OMSI_INPUT` script.
     pub(crate) fn on_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode, pressed: bool, repeat: bool) {
+        // the server's welcome: Enter or Escape plays, the arrows and the page keys scroll it
+        if self.welcome.is_some() {
+            let (max, page) = self.ui.as_ref().map(|u| (u.welcome_max, u.welcome_view)).unwrap_or((0.0, 300.0));
+            let by = match code {
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
+                    if pressed && !repeat {
+                        self.welcome = None;
+                    }
+                    return;
+                }
+                KeyCode::ArrowUp => -60.0,
+                KeyCode::ArrowDown => 60.0,
+                KeyCode::PageUp => -page * 0.9,
+                KeyCode::PageDown | KeyCode::Space => page * 0.9,
+                KeyCode::Home => -1e9,
+                KeyCode::End => 1e9,
+                _ => 0.0,
+            };
+            if by != 0.0 {
+                if pressed {
+                    if let Some(w) = self.welcome.as_mut() {
+                        w.scroll = (w.scroll + by).clamp(0.0, max);
+                    }
+                }
+                return;
+            }
+        }
         if self.vr_nav_edit.is_some() {
             if !pressed { self.keys.remove(&code); }
             if matches!(code, KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::ShiftLeft | KeyCode::ShiftRight) && pressed {
@@ -683,6 +710,13 @@ impl App {
         }
         self.tick_voice(dt);
         self.tick_radio();
+        self.tick_self_duty(dt);
+        // the server's welcome, once the world and the bus are there
+        if self.welcome.is_none() && self.world.is_some() && self.player.is_some() {
+            if let Some(text) = crate::welcome::take() {
+                self.welcome = Some(crate::welcome::Welcome::new(&text));
+            }
+        }
     }
 
     /// The dispatch radio (`phonie`), once a frame of a session.
@@ -717,6 +751,19 @@ impl App {
             }
             return;
         }
+        // whether we may take a duty from our own menu (a dedicated server's `self_duty`)
+        if let Some(arg) = text.strip_prefix("self-duty ") {
+            if from == 1 && lan.role == omsi_net::Role::Client {
+                let on = arg.trim() == "on";
+                if self.self_duty.is_some_and(|was| was != on) {
+                    let msg = if on { "You may take a duty yourself again" } else { "This server gives the duties: ask the dispatcher for one" };
+                    self.service_msg = Some((msg.into(), 6.0));
+                }
+                self.self_duty = Some(on);
+                self.self_duty_ask = 60.0;
+            }
+            return;
+        }
         // the voice server of the session (`voice`): asked of the host, told by it
         if text == "voice?" {
             if lan.role == omsi_net::Role::Host {
@@ -743,6 +790,32 @@ impl App {
             return;
         }
         crate::admin::command(self, from, text);
+    }
+
+    /// A duty the player picks from the menu, refused when the dedicated server joined gives
+    /// the duties itself (`self-duty off`): the player is told so.
+    pub(crate) fn self_duty_refused(&mut self) -> bool {
+        let client = self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client);
+        if client && self.self_duty == Some(false) {
+            self.service_msg = Some(("This server gives the duties: ask the dispatcher for one".into(), 6.0));
+            return true;
+        }
+        false
+    }
+
+    /// Ask the server joined whether its players take their own duties (now and then: the
+    /// answer, or its change, may be lost on the way).
+    fn tick_self_duty(&mut self, dt: f32) {
+        let Some(lan) = self.lan.as_mut().filter(|l| l.role == omsi_net::Role::Client && l.connected) else {
+            self.self_duty = None;
+            self.self_duty_ask = 0.0;
+            return;
+        };
+        self.self_duty_ask -= dt;
+        if self.self_duty_ask <= 0.0 {
+            lan.command(1, "self-duty?");
+            self.self_duty_ask = if self.self_duty.is_some() { 60.0 } else { 5.0 };
+        }
     }
 
     /// The voice chat (`voice`), once a frame of a session: started with it when the
@@ -1274,6 +1347,24 @@ impl App {
 
     pub(crate) fn on_left(&mut self, pressed: bool) {
         if self.vr_nav_edit.is_some() { return; }
+        // the server's welcome: its Play button closes it, a click on its scroll bar scrolls
+        // it, and nothing behind it is worked meanwhile
+        if self.welcome.is_some() {
+            if pressed {
+                if let Some(ui) = self.ui.as_ref() {
+                    if ui.welcome_button_hovered {
+                        self.welcome = None;
+                    } else if let Some(t) = ui.welcome_track.filter(|t| self.cursor.1 >= t[1] && self.cursor.1 <= t[3] && self.cursor.0 >= t[0] - 8.0 && self.cursor.0 <= t[2] + 8.0) {
+                        let k = ((self.cursor.1 - t[1]) / (t[3] - t[1]).max(1.0)).clamp(0.0, 1.0);
+                        let max = ui.welcome_max;
+                        if let Some(w) = self.welcome.as_mut() {
+                            w.scroll = k * max;
+                        }
+                    }
+                }
+            }
+            return;
+        }
         // the object editor: the mouse picks and drags
         if self.game_menu.is_none() && self.editor_mouse(pressed) {
             return;
@@ -2904,7 +2995,11 @@ impl App {
                 self.copy_server_code();
             }
             "admin" => self.open_list(crate::game_lists::ListKind::Admin),
-            "duty" => self.open_list(crate::game_lists::ListKind::Lines),
+            "duty" => {
+                if !self.self_duty_refused() {
+                    self.open_list(crate::game_lists::ListKind::Lines);
+                }
+            }
             "map" => {
                 self.close_game_menu();
                 if let Some(n) = self.navigator.as_mut() {
