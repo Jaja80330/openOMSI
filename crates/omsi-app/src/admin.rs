@@ -412,6 +412,7 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
                         None => "duty-no unknown tour or trip".to_string(),
                         Some(chosen) => {
                             crate::game_lists::start_duty_at(app, &line, &tour, trip, chosen, true);
+                            app.duty_given = app.duty.is_some();
                             let ok = app.duty.as_ref().is_some_and(|d| d.line.eq_ignore_ascii_case(&line) && d.tour.eq_ignore_ascii_case(&tour));
                             log::info!("LAN: the server gave us line {line} tour {tour}, trip {trip} from stop {chosen}: {}", if ok { "taken" } else { "not taken" });
                             if ok {
@@ -434,6 +435,13 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
         "notify" if from == 1 => {
             if let Some((id, n)) = crate::ui::Notice::parse(arg) {
                 log::info!("LAN: the server's notice {id}: {}", n.text);
+                // (kept for the messages' window, with this device's date and time)
+                let at = crate::real_time::now().map(|t| format!("{:02}/{:02}/{} {:02}:{:02}", t.day, t.month, t.year, (t.secs / 3600.0) as u32, (t.secs / 60.0) as u32 % 60)).unwrap_or_default();
+                app.inbox.push(crate::welcome::InboxMessage { at, urgent: n.kind != crate::ui::NoticeKind::Info, text: n.text.clone() });
+                if app.inbox.len() > crate::welcome::INBOX_KEEP {
+                    app.inbox.remove(0);
+                }
+                app.inbox_unread += 1;
                 crate::ui::push_notice(&mut app.notices, n);
                 if let Some(l) = app.lan.as_mut() {
                     l.command(1, &format!("notify-seen {id}"));
@@ -444,6 +452,7 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
         // "end the duty"; the host hears `duty-off-ok` (there was one) or `duty-off-none`
         "duty-off" if from == 1 => {
             let had = app.duty.take().map(|d| format!("{} {}", d.line, d.tour));
+            app.duty_given = false;
             log::info!("LAN: the server took our duty back ({})", had.as_deref().unwrap_or("we had none"));
             if had.is_some() {
                 app.service_msg = Some(("The dispatch took the duty back: free drive".into(), 6.0));

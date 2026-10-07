@@ -468,8 +468,19 @@ pub struct Frame<'a> {
     pub notice_anchor: Option<[f32; 4]>,
     /// The dispatch radio (`phonie`), when the server runs one: its button and the call.
     pub radio: Option<crate::phonie::RadioHud>,
-    /// The server's welcome (its blocks) and how far it is scrolled (px).
-    pub welcome: Option<(&'a [crate::welcome::Block], f32)>,
+    /// The button that takes a duty, left of the radio's (a server that lets its players
+    /// take their own duties); true: a duty is under way (it is orange then).
+    pub duty_button: Option<bool>,
+    /// The SAE menu's button, left of the others (a server joined).
+    pub sae_button: bool,
+    /// The messages' button, beside the duty's (a server joined), and how many messages are
+    /// unread.
+    pub inbox_button: Option<usize>,
+    /// The timetable's button, beside the messages' (a duty to show; true: it is shown).
+    pub timetable_button: Option<bool>,
+    /// The server's welcome (its blocks), how far it is scrolled (px) and its button's label
+    /// (the messages' window as well).
+    pub welcome: Option<(&'a [crate::welcome::Block], f32, &'a str, bool)>,
     /// What kind of menu the lines belong to.
     pub menu_kind: MenuKind,
     /// The open list's title and the small line above it (the line a tour list is of).
@@ -552,6 +563,15 @@ pub struct Ui {
     /// The welcome window this frame: its Play button under the mouse, its scroll bar's
     /// track, how far it scrolls at most and how high its text's view is (px).
     pub welcome_button_hovered: bool,
+    /// ... and its Cancel button (a question's).
+    pub welcome_cancel_hovered: bool,
+    /// The mouse is on the button that takes a duty, on the messages' button.
+    pub duty_button_hovered: bool,
+    pub inbox_button_hovered: bool,
+    pub timetable_button_hovered: bool,
+    pub sae_button_hovered: bool,
+    /// The emergency call's button, left over the navigator.
+    pub emergency_hovered: bool,
     pub welcome_track: Option<[f32; 4]>,
     pub welcome_max: f32,
     pub welcome_view: f32,
@@ -652,7 +672,7 @@ impl Ui {
         self.chat.rect[2] += x;
     }
     pub fn new() -> Option<Ui> {
-        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, welcome_button_hovered: false, welcome_track: None, welcome_max: 0.0, welcome_view: 0.0, load_shown: 0.0, load_last: None })
+        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, welcome_button_hovered: false, welcome_cancel_hovered: false, duty_button_hovered: false, inbox_button_hovered: false, timetable_button_hovered: false, sae_button_hovered: false, emergency_hovered: false, welcome_track: None, welcome_max: 0.0, welcome_view: 0.0, load_shown: 0.0, load_last: None })
     }
 
     /// Draw the frame's interface: its overlays go after the HUD's in `scene.overlays`.
@@ -1447,31 +1467,133 @@ impl Ui {
     fn draw_radio(&mut self, r: &Renderer, scene: &mut Scene, f: &Frame, s: f32) -> Option<[f32; 4]> {
         self.radio_button = None;
         self.radio_hovered = false;
-        let Some(radio) = f.radio.as_ref() else {
+        self.duty_button_hovered = false;
+        self.inbox_button_hovered = false;
+        self.timetable_button_hovered = false;
+        self.sae_button_hovered = false;
+        self.emergency_hovered = false;
+        if f.radio.is_none() && f.duty_button.is_none() && f.inbox_button.is_none() && f.timetable_button.is_none() && !f.sae_button {
             return f.notice_anchor;
-        };
+        }
         use crate::phonie::{CallKind, Talk};
         let gap = 6.0 * s;
         let h = 34.0 * s;
         let nav = f.notice_anchor.unwrap_or([f.width - 316.0 * s, f.height - 12.0 * s, f.width - 16.0 * s, f.height - 12.0 * s]);
         let up = f.notice_anchor.is_none() || nav[1] > f.height * 0.5;
         let top = if up { nav[1] - gap - h } else { nav[3] + gap };
-        // the button, at the navigator's right edge
-        let bw = 58.0 * s;
-        let button = [nav[2] - bw, top, nav[2], top + h];
-        let over = f.cursor.0 >= button[0] && f.cursor.0 <= button[2] && f.cursor.1 >= button[1] && f.cursor.1 <= button[3];
-        let fill = if over && radio.can_request { [44, 174, 80, 255] } else { [32, 150, 64, 245] };
-        self.text.rounded(r, scene, button, 5.0 * s, fill);
-        let icon = self.radio_icon(r, scene, radio.button.icon());
+        // the buttons fit the navigator's width: as designed while there is room, closer
+        // together when there are many (narrower only when that is not enough)
+        let count = [f.radio.is_some(), f.duty_button.is_some(), f.inbox_button.is_some(), f.timetable_button.is_some(), f.sae_button, f.radio.as_ref().is_some_and(|r| r.emergency.is_some())].iter().filter(|b| **b).count() as f32;
+        let room = (nav[2] - nav[0]).max(1.0);
+        let mut bw = 58.0 * s;
+        let mut gap = gap;
+        if count > 1.0 && count * bw + (count - 1.0) * gap > room {
+            gap = ((room - count * bw) / (count - 1.0)).max(3.0 * s);
+            bw = bw.min((room - (count - 1.0) * gap) / count);
+        }
         let iz = 21.0 * s;
-        let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
-        scene.overlays.push((icon, [cx - iz * 0.5, cy - iz * 0.5, cx + iz * 0.5, cy + iz * 0.5]));
-        self.radio_button = Some(button);
-        self.radio_hovered = over;
-        // the call: a band left of the button
-        let x0 = nav[0];
-        let band = [x0, top, button[0] - gap, top + h];
-        if let Some(call) = radio.call.filter(|_| band[2] - band[0] > 80.0 * s) {
+        let over = |b: [f32; 4]| f.cursor.0 >= b[0] && f.cursor.0 <= b[2] && f.cursor.1 >= b[1] && f.cursor.1 <= b[3];
+        // the buttons from the navigator's right edge: the radio's, then the duty's
+        let mut right = nav[2];
+        if let Some(radio) = f.radio.as_ref() {
+            let button = [right - bw, top, right, top + h];
+            let on = over(button);
+            let fill = if on && radio.can_request { [44, 174, 80, 255] } else { [32, 150, 64, 245] };
+            self.text.rounded(r, scene, button, 5.0 * s, fill);
+            let icon = self.radio_icon(r, scene, radio.button.icon());
+            let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
+            scene.overlays.push((icon, [cx - iz * 0.5, cy - iz * 0.5, cx + iz * 0.5, cy + iz * 0.5]));
+            self.radio_button = Some(button);
+            self.radio_hovered = on;
+            right = button[0] - gap;
+        }
+        if let Some(taken) = f.duty_button {
+            let button = [right - bw, top, right, top + h];
+            let on = over(button);
+            // (orange while a duty is under way: a click leaves it)
+            let fill = match (taken, on) {
+                (true, true) => [246, 160, 52, 255],
+                (true, false) => [230, 140, 30, 245],
+                (false, true) => [58, 132, 236, 255],
+                (false, false) => [40, 110, 214, 245],
+            };
+            self.text.rounded(r, scene, button, 5.0 * s, fill);
+            let icon = self.radio_icon(r, scene, "take_duty");
+            let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
+            scene.overlays.push((icon, [cx - iz * 0.5, cy - iz * 0.5, cx + iz * 0.5, cy + iz * 0.5]));
+            self.duty_button_hovered = on;
+            right = button[0] - gap;
+        }
+        if let Some(unread) = f.inbox_button {
+            let button = [right - bw, top, right, top + h];
+            let on = over(button);
+            let fill = if on { [58, 132, 236, 255] } else { [40, 110, 214, 245] };
+            self.text.rounded(r, scene, button, 5.0 * s, fill);
+            let icon = self.radio_icon(r, scene, "inbox");
+            let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
+            scene.overlays.push((icon, [cx - iz * 0.5, cy - iz * 0.5, cx + iz * 0.5, cy + iz * 0.5]));
+            // the messages not looked at yet: a red badge on the corner
+            if unread > 0 {
+                let n = if unread > 9 { "9+".to_string() } else { unread.to_string() };
+                let px = (11.0 * s) as u32 | BOLD;
+                let l = self.text.label_raw(r, scene, &n, px, [255, 255, 255, 255]);
+                let d = (l.h as f32).max(l.w as f32 + 6.0 * s).max(16.0 * s);
+                let (bx, by) = (button[2] - d * 0.6, button[1] - d * 0.4);
+                self.text.rounded(r, scene, [bx, by, bx + d, by + l.h.max(16) as f32], d * 0.5, [226, 60, 52, 255]);
+                let lh = l.h.max(16) as f32;
+                let (lx, ly) = ((bx + (d - l.w as f32) * 0.5).round(), (by + (lh - l.h as f32) * 0.5).round());
+                scene.overlays.push((l.tex, [lx, ly, lx + l.w as f32, ly + l.h as f32]));
+            }
+            self.inbox_button_hovered = on;
+            right = button[0] - gap;
+        }
+        if let Some(shown) = f.timetable_button {
+            let button = [right - bw, top, right, top + h];
+            let on = over(button);
+            // (lighter while the timetable is shown)
+            let fill = if on || shown { [58, 132, 236, 255] } else { [40, 110, 214, 245] };
+            self.text.rounded(r, scene, button, 5.0 * s, fill);
+            let icon = self.radio_icon(r, scene, "timetable");
+            let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
+            let iz = iz * 0.95;
+            scene.overlays.push((icon, [cx - iz * 0.5, cy - iz * 0.5, cx + iz * 0.5, cy + iz * 0.5]));
+            self.timetable_button_hovered = on;
+            right = button[0] - gap;
+        }
+        if f.sae_button {
+            let button = [right - bw, top, right, top + h];
+            let on = over(button);
+            let fill = if on { [58, 132, 236, 255] } else { [40, 110, 214, 245] };
+            self.text.rounded(r, scene, button, 5.0 * s, fill);
+            // "SAE" in a frame, as the icon draws it
+            let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
+            let (fw, fh) = (40.0 * s, 18.0 * s);
+            let frame = [(cx - fw * 0.5).round(), (cy - fh * 0.5).round(), (cx + fw * 0.5).round(), (cy + fh * 0.5).round()];
+            let t = (1.6 * s).max(1.0).round();
+            self.text.rounded(r, scene, frame, 2.0 * s, [255, 255, 255, 255]);
+            self.text.rounded(r, scene, [frame[0] + t, frame[1] + t, frame[2] - t, frame[3] - t], 1.0 * s, fill);
+            let l = self.text.label_raw(r, scene, "SAE", (11.5 * s) as u32 | BOLD, [255, 255, 255, 255]);
+            let (lx, ly) = ((cx - l.w as f32 * 0.5).round(), (cy - l.h as f32 * 0.5).round());
+            scene.overlays.push((l.tex, [lx, ly, lx + l.w as f32, ly + l.h as f32]));
+            self.sae_button_hovered = on;
+            right = button[0] - gap;
+        }
+        // the emergency call: a red button at the navigator's left edge
+        let mut x0 = nav[0];
+        if let Some((state, can)) = f.radio.as_ref().and_then(|r| r.emergency) {
+            let button = [x0, top, x0 + bw, top + h];
+            let on = over(button);
+            let fill = if state == crate::phonie::Button::InCall || (on && can) { [236, 64, 56, 255] } else { [200, 40, 36, 245] };
+            self.text.rounded(r, scene, button, 5.0 * s, fill);
+            let icon = self.radio_icon(r, scene, state.icon());
+            let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
+            scene.overlays.push((icon, [cx - iz * 0.5, cy - iz * 0.5, cx + iz * 0.5, cy + iz * 0.5]));
+            self.emergency_hovered = on;
+            x0 = button[2] + gap;
+        }
+        // the call: a band between the buttons
+        let band = [x0, top, right, top + h];
+        if let Some((radio, call)) = f.radio.as_ref().and_then(|radio| radio.call.map(|c| (radio, c))).filter(|_| band[2] - band[0] > 80.0 * s) {
             let accent = match call {
                 CallKind::Individual => [90, 160, 255],
                 CallKind::Selective => [240, 170, 50],
@@ -1519,8 +1641,9 @@ impl Ui {
     /// within it, a scroll bar when it is longer, and the Play button that closes it.
     fn draw_welcome(&mut self, r: &Renderer, scene: &mut Scene, f: &Frame, s: f32) {
         self.welcome_button_hovered = false;
+        self.welcome_cancel_hovered = false;
         self.welcome_track = None;
-        let Some((blocks, scroll)) = f.welcome else {
+        let Some((blocks, scroll, button, question)) = f.welcome else {
             self.welcome_max = 0.0;
             return;
         };
@@ -1608,13 +1731,26 @@ impl Ui {
         let fy = y0 + h - foot;
         scene.overlays.push((line, [x0 + 1.0, fy, x0 + w - 1.0, fy + (1.0 * s).max(1.0)]));
         let (bw, bh) = (200.0 * s, 44.0 * s);
-        let bx = (x0 + (w - bw) * 0.5).round();
         let by = (fy + (foot - bh) * 0.5).round();
-        let over = f.cursor.0 >= bx && f.cursor.0 <= bx + bw && f.cursor.1 >= by && f.cursor.1 <= by + bh;
+        let over_at = |bx: f32| f.cursor.0 >= bx && f.cursor.0 <= bx + bw && f.cursor.1 >= by && f.cursor.1 <= by + bh;
+        // a question: Cancel on the left, its button on the right
+        let bx = if question {
+            let cx = (x0 + w * 0.5 - bw - 8.0 * s).round();
+            let on = over_at(cx);
+            self.welcome_cancel_hovered = on;
+            self.text.rounded(r, scene, [cx, by, cx + bw, by + bh], 8.0 * s, if on { [72, 76, 86, 255] } else { [56, 60, 68, 255] });
+            let l = self.text.label(r, scene, "Cancel", (17.0 * s) as u32 | BOLD, [240, 240, 240, 255]);
+            let (lx, ly) = ((cx + (bw - l.w as f32) * 0.5).round(), (by + (bh - l.h as f32) * 0.5).round());
+            scene.overlays.push((l.tex, [lx, ly, lx + l.w as f32, ly + l.h as f32]));
+            (x0 + w * 0.5 + 8.0 * s).round()
+        } else {
+            (x0 + (w - bw) * 0.5).round()
+        };
+        let over = over_at(bx);
         self.welcome_button_hovered = over;
         let fill = if over { [244, 176, 66, 255] } else { [232, 160, 48, 255] };
         self.text.rounded(r, scene, [bx, by, bx + bw, by + bh], 8.0 * s, fill);
-        let l = self.text.label(r, scene, "Play", (17.0 * s) as u32 | BOLD, [24, 20, 14, 255]);
+        let l = self.text.label(r, scene, button, (17.0 * s) as u32 | BOLD, [24, 20, 14, 255]);
         let (lx, ly) = ((bx + (bw - l.w as f32) * 0.5).round(), (by + (bh - l.h as f32) * 0.5).round());
         scene.overlays.push((l.tex, [lx, ly, lx + l.w as f32, ly + l.h as f32]));
     }

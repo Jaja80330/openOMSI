@@ -2320,8 +2320,14 @@ impl ApplicationHandler for App {
                             || self.chooser.is_some()
                             || ui.chat.hovered
                             || ui.radio_hovered
+                            || ui.duty_button_hovered
+                            || ui.inbox_button_hovered
+                            || ui.timetable_button_hovered
+                            || ui.sae_button_hovered
+                            || ui.emergency_hovered
                             || map_open
                             || (!vr_active && self.navigator.as_ref().is_some_and(|n| n.over_panel(cx, cy)));
+                        let seated = self.player.is_some() && self.on_foot.is_none() && self.inside_remote.is_none();
                         let dropdown = self.dropdown.as_ref().filter(|_| self.chooser.is_some()).map(|d| ui::DropdownView {
                             row: d.row,
                             items: d.items.iter().map(|x| x.0.as_str()).collect(),
@@ -2381,8 +2387,14 @@ impl ApplicationHandler for App {
                             tags,
                             notices: &self.notices,
                             notice_anchor: self.navigator.as_ref().and_then(|n| n.screen_rect()),
-                            radio: self.phonie.as_ref().and_then(|r| r.hud()),
-                            welcome: self.welcome.as_ref().map(|w| (w.blocks.as_slice(), w.scroll)),
+                            // (the row of buttons only for a driver in the seat: none for one
+                            // walking about or sitting in another player's bus)
+                            radio: self.phonie.as_ref().and_then(|r| r.hud()).filter(|_| seated),
+                            welcome: self.welcome.as_ref().map(|w| (w.blocks.as_slice(), w.scroll, w.button, w.action.is_some())),
+                            inbox_button: (seated && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)).then_some(self.inbox_unread),
+                            timetable_button: (seated && self.duty.is_some()).then_some(self.timetable),
+                            duty_button: (seated && self.self_duty == Some(true) && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)).then_some(self.duty.is_some()),
+                            sae_button: seated && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client),
                         };
                         ui.draw_at(r, scene, &frame, dt, hud[0]);
                     }

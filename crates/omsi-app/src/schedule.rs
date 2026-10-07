@@ -3530,6 +3530,21 @@ impl PlannedTrip {
 
 /// The bus is at a stop within this distance (m), and has left it beyond the second.
 const AT_STOP: f64 = 25.0;
+
+/// How near the stop a bus must stand for the driver to re-sync the duty there (m): a bus
+/// stops some way along its stop's object.
+pub const RESYNC_REACH: f64 = 60.0;
+
+/// Why a re-sync was refused.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Resync {
+    /// No such stop or trip.
+    Unknown,
+    /// The stop's place on the map is not known (its tile is not loaded).
+    NoPlace,
+    /// The bus stands this far from it (m).
+    TooFar(f64),
+}
 /// How long before its departure the next trip of a duty may begin when the bus leaves the
 /// terminus it has served (s).
 const EARLY_START: f64 = 300.0;
@@ -4595,6 +4610,64 @@ impl PlayerDuty {
             self.held_back = true;
         }
         true
+    }
+
+    /// The SAE menu's "re-sync at a stop": the stops of the trip under way the driver may
+    /// say the bus stands at (index, name, departure in seconds of the day) - those it serves.
+    pub fn resync_stops(&self) -> Vec<(usize, String, f64)> {
+        self.trip().stops.iter().enumerate().filter(|(_, s)| s.stops).map(|(i, s)| (i, s.name.trim().to_string(), s.dep)).collect()
+    }
+
+    /// The SAE menu's "re-sync at a terminus": the trips of the duty from the one under way
+    /// on, by where they leave (index, first stop, departure in seconds of the day).
+    pub fn resync_termini(&self) -> Vec<(usize, String, f64)> {
+        self.trips
+            .iter()
+            .enumerate()
+            .skip(self.trip_index)
+            .filter_map(|(i, t)| t.stops.first().map(|s| (i, s.name.trim().to_string(), t.departure)))
+            .collect()
+    }
+
+    /// Re-sync at a stop: the driver says the bus stands at stop `stop` of the trip under way
+    /// (it is at `pos`); the duty goes on from there - the stops before it no longer due, and
+    /// those after it due again. The bus is not moved: it must stand at the stop.
+    pub fn resync_stop(&mut self, stop: usize, pos: glam::DVec3) -> Result<String, Resync> {
+        let s = self.trip().stops.get(stop).ok_or(Resync::Unknown)?;
+        let name = s.name.trim().to_string();
+        Self::near(s.position, pos)?;
+        self.next_stop = stop;
+        self.at_stop = false;
+        self.done = false;
+        self.served_terminus = None;
+        self.arrived_late = None;
+        self.held_back = true;
+        self.placed = true;
+        Ok(name)
+    }
+
+    /// Re-sync at a terminus, between two trips: the driver says the bus stands at the
+    /// first stop of the duty's trip `trip`, ready for it; the duty goes on with that trip.
+    pub fn resync_terminus(&mut self, trip: usize, pos: glam::DVec3) -> Result<String, Resync> {
+        let s = self.trips.get(trip).and_then(|t| t.stops.first()).ok_or(Resync::Unknown)?;
+        let name = s.name.trim().to_string();
+        Self::near(s.position, pos)?;
+        if trip != self.trip_index || self.next_stop != 0 || self.done {
+            self.set_trip(trip);
+        }
+        self.picked = true;
+        self.placed = true;
+        Ok(name)
+    }
+
+    /// The bus at `pos` stands at a stop at `at` (within `RESYNC_REACH`).
+    fn near(at: Option<glam::DVec3>, pos: glam::DVec3) -> Result<(), Resync> {
+        let at = at.ok_or(Resync::NoPlace)?;
+        let d = (at - pos).truncate().length();
+        if d > RESYNC_REACH {
+            return Err(Resync::TooFar(d));
+        }
+        Ok(())
     }
 
     /// Whether the trip still has a stop to come ([`PlayerDuty::skip_next`]).
@@ -5889,6 +5962,52 @@ pub(crate) mod tests {
         };
         d.advance(glam::DVec3::new(800.0, 0.0, 0.0), 345.0);
         assert_eq!(d.trip_index, 0);
+    }
+
+    /// The SAE menu's re-sync: the duty goes on from the stop or the trip the driver says the
+    /// bus stands at - only when it does stand there.
+    #[test]
+    fn the_driver_resyncs_the_duty_at_a_stop_or_a_terminus_where_the_bus_stands() {
+        let t1 = planned(0.0, &[(0.0, 0.0, 0.0), (500.0, 100.0, 100.0), (1000.0, 200.0, 200.0)]);
+        let t2 = planned(400.0, &[(1040.0, 400.0, 400.0), (1500.0, 500.0, 500.0)]);
+        let mut d = PlayerDuty {
+            line: "5".into(),
+            tour: "1".into(),
+            trips: vec![t1, t2],
+            trip_index: 0,
+            first_trip: 0,
+            next_stop: 0,
+            at_stop: false,
+            arrived_late: None,
+            done: false,
+            served_terminus: None,
+            left_late: None,
+            held_back: false,
+            placed: true,
+            trip_changed: false,
+            skipped: None,
+            picked: true,
+            first_update: None,
+            heading: 90.0,
+        };
+        assert_eq!(d.resync_stops().len(), 3);
+        // far from the stop: refused, nothing changes
+        assert!(matches!(d.resync_stop(2, glam::DVec3::new(700.0, 0.0, 0.0)), Err(Resync::TooFar(_))));
+        assert_eq!(d.next_stop, 0);
+        // at it: the duty is there
+        assert_eq!(d.resync_stop(2, glam::DVec3::new(1030.0, 10.0, 0.0)).as_deref(), Ok("s2"));
+        assert_eq!(d.next_stop, 2);
+        d.advance(glam::DVec3::new(1000.0, 0.0, 0.0), 190.0);
+        assert!(d.at_stop);
+        // and back to an earlier one
+        assert!(d.resync_stop(1, glam::DVec3::new(510.0, 0.0, 0.0)).is_ok());
+        assert_eq!((d.next_stop, d.done), (1, false));
+        // the next trip, from its first stop
+        assert_eq!(d.resync_termini().iter().map(|t| t.0).collect::<Vec<_>>(), [0, 1]);
+        assert!(matches!(d.resync_terminus(1, glam::DVec3::new(0.0, 0.0, 0.0)), Err(Resync::TooFar(_))));
+        assert_eq!(d.resync_terminus(1, glam::DVec3::new(1045.0, 0.0, 0.0)).as_deref(), Ok("s0"));
+        assert_eq!((d.trip_index, d.next_stop), (1, 0));
+        assert_eq!(d.resync_terminus(5, glam::DVec3::ZERO), Err(Resync::Unknown));
     }
 
     /// #1015: the next stop given up from the menu, and at the trip's last one the trip.

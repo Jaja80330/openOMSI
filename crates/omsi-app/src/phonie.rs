@@ -27,12 +27,21 @@
 //! request goes out, and it is set back to 0) and `Phonie_Cmd_PTT` (1 while the cab's key
 //! is held) are read from them.
 //!
+//! * An urgent request (`radio request urgent`, the SAE menu): a request the consoles show
+//!   first and as urgent.
+//! * The emergency call (`radio emergency`, the red button left over the navigator), when a
+//!   dispatcher switched it on for the drivers (`{"t": "emergency_enable", "on": …}` from a
+//!   console): every call on the radio ends at once, and the driver is in an individual call
+//!   with a dispatcher (the first console), without waiting to be called back.
+//!
 //! The voice goes as `omsi_net::dispatch` frames (8 kHz ADPCM); the radio's sound is made
 //! where it is heard (`omsi_audio::twoway`). The server tells each player where its radio
 //! stands every two seconds and whenever it changes: `radio state <call> <talk> <request>
-//! <dispatcher>` (`none|individual|selective|general`, `-|dispatcher|driver`,
-//! `none|pending|taken`, `on|off`: a dispatcher's console is connected) - a game that hears
-//! no more of it for a while takes the radio for gone.
+//! <dispatcher> <emergency> <urgent>` (`none|individual|selective|general`,
+//! `-|dispatcher|driver`, `none|pending|taken`, `on|off`: a dispatcher's console is
+//! connected, `on|off`: the emergency call may be made, `emergency|-`: the call is one) - a
+//! game that hears no more of it for a while takes the radio for gone; an older game reads
+//! the first four.
 
 use omsi_net::dispatch::{self, ConsoleIn, ConsoleOut, Frame};
 use omsi_net::LanSession;
@@ -148,6 +157,8 @@ struct PendingRequest {
     /// When it came (Unix seconds, for the dispatch page).
     since: u64,
     taken: bool,
+    /// Urgent (the SAE menu's urgent call): the consoles show it first.
+    urgent: bool,
 }
 
 /// A console's call: its players, who talks in it.
@@ -164,6 +175,8 @@ struct Call {
     dispatcher: Option<Instant>,
     /// The driver talking in an individual call, and until when.
     driver: Option<(u32, Instant)>,
+    /// A driver's emergency call (`radio emergency`).
+    emergency: bool,
 }
 
 impl Call {
@@ -201,6 +214,10 @@ pub(crate) struct RadioServer {
     /// What the consoles were told last.
     console_state: String,
     console_refresh: f32,
+    /// The drivers may make the emergency call (a dispatcher switched it on).
+    emergency: bool,
+    /// The players driving a bus of their own, at the last tick.
+    drivers: Vec<u32>,
 }
 
 impl RadioServer {
@@ -208,7 +225,7 @@ impl RadioServer {
     pub(crate) fn new() -> RadioServer {
         dispatch::open_consoles();
         log::info!("server: dispatch radio on (consoles at the gateway's /dispatch)");
-        RadioServer { requests: Vec::new(), calls: Vec::new(), consoles: Vec::new(), told: Default::default(), refresh: 0.0, console_state: String::new(), console_refresh: 0.0 }
+        RadioServer { requests: Vec::new(), calls: Vec::new(), consoles: Vec::new(), told: Default::default(), refresh: 0.0, console_state: String::new(), console_refresh: 0.0, emergency: false, drivers: Vec::new() }
     }
 
     /// The call player `id` is in.
@@ -218,21 +235,53 @@ impl RadioServer {
 
     /// A player's `radio …` command.
     pub(crate) fn command(&mut self, from: u32, arg: &str) {
-        if arg.trim() == "request" {
+        let arg = arg.trim();
+        if arg == "request" || arg == "request urgent" {
+            let urgent = arg.ends_with("urgent");
             // (a driver already in a call with a dispatcher has nothing to ask for)
             if self.call_of(from).is_some_and(|c| c.kind == CallKind::Individual) {
                 return;
             }
             match self.requests.iter_mut().find(|r| r.player == from) {
-                Some(r) => r.taken = false,
+                Some(r) => {
+                    r.taken = false;
+                    r.urgent |= urgent;
+                }
                 None => {
-                    log::info!("radio: player {from} asks to be called");
-                    self.requests.push(PendingRequest { player: from, since: unix_now(), taken: false });
+                    log::info!("radio: player {from} asks to be called{}", if urgent { " (urgent)" } else { "" });
+                    self.requests.push(PendingRequest { player: from, since: unix_now(), taken: false, urgent });
                 }
             }
             self.refresh = 0.0;
             self.console_refresh = 0.0;
+        } else if arg == "emergency" {
+            let drivers = std::mem::take(&mut self.drivers);
+            self.emergency_call(from, &drivers);
+            self.drivers = drivers;
         }
+    }
+
+    /// A driver's emergency call: when the dispatchers allow it and one is on duty, every
+    /// call on the radio ends, and the driver is in an individual call with the first console.
+    fn emergency_call(&mut self, from: u32, drivers: &[u32]) {
+        let Some(console) = self.consoles.iter().map(|c| c.id).min() else {
+            log::info!("radio: player {from}'s emergency call: no dispatcher on duty");
+            return;
+        };
+        if !self.emergency || !drivers.contains(&from) {
+            log::info!("radio: player {from}'s emergency call refused ({})", if self.emergency { "not driving" } else { "switched off" });
+            return;
+        }
+        if self.calls.iter().any(|c| c.emergency && c.members == [from]) {
+            return;
+        }
+        log::warn!("radio: player {from} makes the emergency call: every call ends, console {console} takes it");
+        self.calls.clear();
+        self.requests.retain(|r| r.player != from);
+        self.calls.push(Call { console, kind: CallKind::Individual, members: vec![from], since: unix_now(), dispatcher: None, driver: None, emergency: true });
+        dispatch::to_consoles(ConsoleOut::Text(json!({"t": "emergency", "player": from, "console": console}).to_string()));
+        self.refresh = 0.0;
+        self.console_refresh = 0.0;
     }
 
     /// A frame to the consoles listening to every call, but `except` (it has it already, or
@@ -255,6 +304,7 @@ impl RadioServer {
         // radio to be called on
         let mut drivers: Vec<u32> = lan.peers().filter(|p| p.pose.walker.is_none() && p.pose.has_vehicle()).map(|p| p.pose.id).collect();
         drivers.sort_unstable();
+        self.drivers = drivers.clone();
         let name = |id: u32| names.get(&id).cloned().unwrap_or_default();
         // players gone: their requests, their place in a call; a general call takes the
         // drivers no other call has
@@ -340,7 +390,14 @@ impl RadioServer {
                 Some(_) => Request::Pending,
                 None => Request::None,
             };
-            let line = format!("radio state {call} {talk} {} {}", req.word(), if on_duty { "on" } else { "off" });
+            let urgent = self.call_of(id).is_some_and(|c| c.emergency);
+            let line = format!(
+                "radio state {call} {talk} {} {} {} {}",
+                req.word(),
+                if on_duty { "on" } else { "off" },
+                if self.emergency && on_duty { "on" } else { "off" },
+                if urgent { "emergency" } else { "-" }
+            );
             if due || self.told.get(&id) != Some(&line) {
                 lan.command(id, &line);
                 self.told.insert(id, line);
@@ -352,10 +409,11 @@ impl RadioServer {
         let owner = |console: u64| self.consoles.iter().find(|c| c.id == console).map(|c| c.name.clone()).unwrap_or_default();
         let state = json!({
             "t": "state",
-            "requests": self.requests.iter().map(|r| json!({"player": r.player, "name": name(r.player), "since": r.since, "taken": r.taken})).collect::<Vec<_>>(),
+            "requests": self.requests.iter().map(|r| json!({"player": r.player, "name": name(r.player), "since": r.since, "taken": r.taken, "urgent": r.urgent})).collect::<Vec<_>>(),
+            "emergency": self.emergency,
             "calls": self.calls.iter().map(|c| {
                 let talk = c.talk();
-                json!({"console": c.console, "owner": owner(c.console), "kind": c.kind.word(), "players": c.members, "since": c.since, "talk": talk.word(), "driver": c.driver.filter(|_| talk == Talk::Driver).map(|(d, _)| d)})
+                json!({"console": c.console, "owner": owner(c.console), "kind": c.kind.word(), "players": c.members, "since": c.since, "talk": talk.word(), "driver": c.driver.filter(|_| talk == Talk::Driver).map(|(d, _)| d), "emergency": c.emergency})
             }).collect::<Vec<_>>(),
             "players": here.iter().map(|&id| json!({"id": id, "name": name(id), "bus": drivers.contains(&id), "call": self.call_of(id).map(|c| c.console)})).collect::<Vec<_>>(),
             "consoles": self.consoles.iter().map(|c| json!({"console": c.id, "name": c.name, "monitor": c.monitor})).collect::<Vec<_>>(),
@@ -404,7 +462,7 @@ impl RadioServer {
                 }
                 log::info!("radio: console {console}: {} call to {:?}", kind.word(), members);
                 self.calls.retain(|c| c.console != console);
-                self.calls.push(Call { console, kind, members, since: unix_now(), dispatcher: None, driver: None });
+                self.calls.push(Call { console, kind, members, since: unix_now(), dispatcher: None, driver: None, emergency: false });
             }
             "end" => {
                 if let Some(c) = self.calls.iter().find(|c| c.console == console) {
@@ -418,6 +476,11 @@ impl RadioServer {
                 }
             }
             "drop" => self.requests.retain(|r| Some(r.player) != player),
+            // the drivers' emergency call, switched on or off for every console
+            "emergency_enable" => {
+                self.emergency = v.get("on").and_then(Value::as_bool).unwrap_or(false);
+                log::info!("radio: console {console}: the drivers' emergency call {}", if self.emergency { "on" } else { "off" });
+            }
             "ptt" => {
                 let on = v.get("on").and_then(Value::as_bool).unwrap_or(false);
                 if let Some(c) = self.calls.iter_mut().find(|c| c.console == console) {
@@ -462,6 +525,9 @@ pub(crate) struct RadioHud {
     pub blocked: bool,
     /// No microphone to talk with (why).
     pub mic_error: Option<String>,
+    /// The emergency call's button (none: the dispatchers did not switch it on): its handset,
+    /// and whether it can be pressed.
+    pub emergency: Option<(Button, bool)>,
 }
 
 /// What the button's handset says.
@@ -508,6 +574,9 @@ impl BusVars for omsi_sim::VehicleInstance {
 
 /// A request unanswered this long is over in the game (the dispatcher keeps it).
 const REQUEST_WAIT: Duration = Duration::from_secs(60);
+/// An emergency call the server did not answer is over in the game after this long (the
+/// button can be pressed again).
+const EMERGENCY_WAIT: Duration = Duration::from_secs(10);
 
 /// The radio in a player's game.
 pub(crate) struct Radio {
@@ -533,6 +602,11 @@ pub(crate) struct Radio {
     voice: Option<omsi_audio::VoiceId>,
     /// A transmission is coming in, its last frame when.
     receiving: Option<Instant>,
+    /// The emergency call may be made (the dispatchers switched it on), our call is one, and
+    /// when we made it (until the server says the call is on).
+    emergency_on: bool,
+    emergency_call: bool,
+    emergency_sent: Option<Instant>,
 }
 
 /// The incoming voice's buffer before it plays (s): enough for a frame that is late.
@@ -559,6 +633,9 @@ impl Radio {
             out: std::sync::Arc::new(omsi_audio::stream::StreamBuf::live(dispatch::RATE, PREBUFFER)),
             voice: None,
             receiving: None,
+            emergency_on: false,
+            emergency_call: false,
+            emergency_sent: None,
         }
     }
 
@@ -582,6 +659,11 @@ impl Radio {
         self.talk = talk;
         self.request = request;
         self.on_duty = w.next() != Some("off");
+        self.emergency_on = w.next() == Some("on");
+        self.emergency_call = w.next() == Some("emergency") && call.is_some();
+        if self.emergency_call {
+            self.emergency_sent = None;
+        }
         // answered (called back) or dropped: our request is over (a state that left before
         // the request reached the server says nothing of it)
         if (was.1 != Request::None && request == Request::None) || call.is_some() {
@@ -614,6 +696,29 @@ impl Radio {
         }
         self.requested = Some(Instant::now());
         lan.command(1, "radio request");
+    }
+
+    /// The SAE menu's urgent call: a request the dispatchers see first.
+    pub(crate) fn request_urgent(&mut self, lan: &mut LanSession) {
+        if !self.available() || !self.on_duty || self.call == Some(CallKind::Individual) {
+            return;
+        }
+        self.requested = Some(Instant::now());
+        lan.command(1, "radio request urgent");
+    }
+
+    /// The emergency call can be made now.
+    pub(crate) fn can_emergency(&self) -> bool {
+        self.available() && self.on_duty && self.emergency_on && !self.emergency_call && !self.emergency_sent.is_some_and(|t| t.elapsed() < EMERGENCY_WAIT)
+    }
+
+    /// The emergency call: every call on the radio ends, a dispatcher takes ours at once.
+    pub(crate) fn emergency(&mut self, lan: &mut LanSession) {
+        if !self.can_emergency() {
+            return;
+        }
+        self.emergency_sent = Some(Instant::now());
+        lan.command(1, "radio emergency");
     }
 
     fn play(&mut self, samples: &[f32]) {
@@ -757,6 +862,18 @@ impl Radio {
             sending: self.sending,
             blocked: (self.ptt || self.bus_ptt) && !self.sending && self.call.is_some(),
             mic_error: self.mic_error.clone(),
+            emergency: self.emergency_on.then(|| {
+                let b = if !self.available() || !self.on_duty {
+                    Button::Unavailable
+                } else if self.emergency_call {
+                    Button::InCall
+                } else if self.emergency_sent.is_some_and(|t| t.elapsed() < EMERGENCY_WAIT) {
+                    Button::Requested
+                } else {
+                    Button::Idle
+                };
+                (b, self.can_emergency())
+            }),
         })
     }
 }
@@ -866,18 +983,18 @@ mod tests {
         // the driver's button: a request, which the console sees
         driver.command(1, "radio request");
         run(&mut host, &mut driver, &mut radio, 20, &mut told, &mut to_console);
-        assert_eq!(last_state(&told), "state none - pending on");
+        assert_eq!(last_state(&told), "state none - pending on off -");
         let st = console_state(&to_console);
         assert_eq!(st["requests"][0]["player"], me);
         assert_eq!(st["requests"][0]["taken"], false);
         // taken
         dispatch::console_said(ConsoleIn::Text(console, json!({"t": "take", "player": me}).to_string()));
         run(&mut host, &mut driver, &mut radio, 10, &mut told, &mut to_console);
-        assert_eq!(last_state(&told), "state none - taken on");
+        assert_eq!(last_state(&told), "state none - taken on off -");
         // called back: the request is answered
         dispatch::console_said(ConsoleIn::Text(console, json!({"t": "call", "kind": "individual", "players": [me]}).to_string()));
         run(&mut host, &mut driver, &mut radio, 10, &mut told, &mut to_console);
-        assert_eq!(last_state(&told), "state individual - none on");
+        assert_eq!(last_state(&told), "state individual - none on off -");
         assert_eq!(console_state(&to_console)["calls"][0]["kind"], "individual");
         assert_eq!(console_state(&to_console)["calls"][0]["console"], console);
         // the driver talks: the console hears it, the driver's id first
@@ -899,16 +1016,38 @@ mod tests {
         run(&mut host, &mut driver, &mut radio, 10, &mut told, &mut to_console);
         assert!(!to_console.iter().any(|m| matches!(m, ConsoleOut::Binary(_))), "the driver came through over the dispatcher");
         assert_eq!(driver.take_radio().iter().filter(|(who, _)| *who == dispatch::DISPATCHER).count(), 1);
-        assert_eq!(last_state(&told), "state individual dispatcher none on");
+        assert_eq!(last_state(&told), "state individual dispatcher none on off -");
         // the dispatcher ends the call (the driver cannot)
         dispatch::console_said(ConsoleIn::Text(console, json!({"t": "ptt", "on": false}).to_string()));
         dispatch::console_said(ConsoleIn::Text(console, json!({"t": "end"}).to_string()));
         run(&mut host, &mut driver, &mut radio, 10, &mut told, &mut to_console);
-        assert_eq!(last_state(&told), "state none - none on");
+        assert_eq!(last_state(&told), "state none - none on off -");
+        // an urgent request: the console sees it as urgent
+        driver.command(1, "radio request urgent");
+        run(&mut host, &mut driver, &mut radio, 10, &mut told, &mut to_console);
+        assert_eq!(console_state(&to_console)["requests"][0]["urgent"], true);
+        // the emergency call, switched off: nothing happens
+        dispatch::console_said(ConsoleIn::Text(console, json!({"t": "call", "kind": "general"}).to_string()));
+        driver.command(1, "radio emergency");
+        run(&mut host, &mut driver, &mut radio, 10, &mut told, &mut to_console);
+        assert_eq!(last_state(&told), "state general - pending on off -");
+        // switched on: the general call ends, the driver is in an individual call at once
+        dispatch::console_said(ConsoleIn::Text(console, json!({"t": "emergency_enable", "on": true}).to_string()));
+        run(&mut host, &mut driver, &mut radio, 5, &mut told, &mut to_console);
+        assert_eq!(last_state(&told), "state general - pending on on -");
+        driver.command(1, "radio emergency");
+        run(&mut host, &mut driver, &mut radio, 10, &mut told, &mut to_console);
+        assert_eq!(last_state(&told), "state individual - none on on emergency");
+        let st = console_state(&to_console);
+        assert_eq!(st["calls"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(st["calls"][0]["emergency"], true);
+        assert!(to_console.iter().any(|m| matches!(m, ConsoleOut::Text(t) if t.contains("\"t\":\"emergency\""))));
+        dispatch::console_said(ConsoleIn::Text(console, json!({"t": "end"}).to_string()));
+        run(&mut host, &mut driver, &mut radio, 5, &mut told, &mut to_console);
         dispatch::unregister_console(console);
         // no console left: no dispatcher on duty
         run(&mut host, &mut driver, &mut radio, 5, &mut told, &mut to_console);
-        assert_eq!(last_state(&told), "state none - none off");
+        assert_eq!(last_state(&told), "state none - none off off -");
     }
 
     #[test]

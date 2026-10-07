@@ -187,8 +187,16 @@ pub(crate) struct App {
     pub(crate) self_duty: Option<bool>,
     /// Seconds before the server is asked again.
     pub(crate) self_duty_ask: f32,
-    /// The server's welcome, shown over the game until its Play button (`welcome`).
+    /// The server's welcome, shown over the game until its Play button (`welcome`); the
+    /// messages' window is shown in its place.
     pub(crate) welcome: Option<crate::welcome::Welcome>,
+    /// The server dispatcher's messages of this session (`notify`), and how many came since
+    /// the messages were last looked at.
+    pub(crate) inbox: Vec<crate::welcome::InboxMessage>,
+    pub(crate) inbox_unread: usize,
+    /// The duty under way was given by the server's dispatcher (`duty`), not taken from the
+    /// player's own menu: the duty button does not leave it.
+    pub(crate) duty_given: bool,
     /// Head tracking (Settings → head tracking), started with the first frame that wants it.
     pub(crate) headtrack: Option<crate::headtrack::HeadTracker>,
     /// When head tracking last failed to start (tried again a few seconds later).

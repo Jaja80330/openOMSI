@@ -44,6 +44,13 @@ pub(crate) enum ListKind {
     Hofs,
     /// The map's entry points (the launcher's "Start at"), to put the bus at.
     Spots,
+    /// The SAE menu (the button beside the navigator): re-sync the duty, the messages, a
+    /// call to the dispatcher.
+    Sae,
+    /// The trip's stops, to re-sync the duty at the one the bus stands at.
+    SaeStops,
+    /// The duty's trips by where they leave, to re-sync between two trips.
+    SaeTermini,
     /// Placing a vehicle: its manufacturer, then its type (the manufacturer's key), its
     /// livery, then its depot file (bus file; bus file and livery).
     PlaceMaker,
@@ -441,6 +448,34 @@ pub(crate) fn items(app: &App, kind: &ListKind) -> Vec<(String, String)> {
                 out.push((tr("No timetable on this map"), "back".into()));
             }
         }
+        ListKind::Sae => {
+            out.push((tr("Re-sync at a stop"), "sae_stops".into()));
+            out.push((tr("Re-sync at a terminus"), "sae_termini".into()));
+            let unread = if app.inbox_unread > 0 { format!("  ({})", app.inbox_unread) } else { String::new() };
+            out.push((format!("{}{unread}", tr("Messages")), "sae_inbox".into()));
+            out.push((tr("Call the dispatcher"), "sae_call".into()));
+            out.push((tr("Urgent call"), "sae_urgent".into()));
+        }
+        ListKind::SaeStops => {
+            if let Some(d) = app.duty.as_ref() {
+                for (i, name, dep) in d.resync_stops() {
+                    out.push((format!("{}  {name}", crate::schedule::hhmm(dep.rem_euclid(86400.0))), format!("stop {i}")));
+                }
+            }
+            if out.is_empty() {
+                out.push((tr("No duty under way"), "back".into()));
+            }
+        }
+        ListKind::SaeTermini => {
+            if let Some(d) = app.duty.as_ref() {
+                for (i, name, dep) in d.resync_termini() {
+                    out.push((format!("{}  {name}", crate::schedule::hhmm(dep.rem_euclid(86400.0))), format!("trip {i}")));
+                }
+            }
+            if out.is_empty() {
+                out.push((tr("No duty under way"), "back".into()));
+            }
+        }
         ListKind::Tours(line, _) => {
             if let Some(l) = app.schedule.as_ref().and_then(|s| s.data.lines.iter().find(|l| l.name == *line)) {
                 for t in sorted_tours(l).into_iter().filter(|t| app.schedule.as_ref().is_some_and(|s| tour_listed(s, line, t, app.clock.time))) {
@@ -704,6 +739,9 @@ pub(crate) fn menu_extras(
         ListKind::RouteNumbers => (MenuKind::List, Some((tr("Route number"), String::new())), None),
         ListKind::Hofs => (MenuKind::List, head("Depot file (HOF)..."), None),
         ListKind::Spots => (MenuKind::List, head("Teleport to a start point..."), None),
+        ListKind::Sae => (MenuKind::List, Some((tr("SAE menu"), String::new())), None),
+        ListKind::SaeStops => (MenuKind::List, head("Re-sync at a stop"), None),
+        ListKind::SaeTermini => (MenuKind::List, head("Re-sync at a terminus"), None),
         ListKind::PlaceMaker | ListKind::PlaceType(_) | ListKind::PlaceLivery(_) | ListKind::PlaceHof(..) => (MenuKind::List, head("Place a vehicle..."), None),
         ListKind::Admin => (MenuKind::List, Some((tr("Administration"), String::new())), None),
     }
@@ -723,6 +761,7 @@ pub(crate) fn run_move(app: &mut App, kind: &ListKind, action: &str, mv: Move) -
     if action == "back" {
         return match kind {
             ListKind::Tours(..) => Some(ListKind::Lines),
+            ListKind::SaeStops | ListKind::SaeTermini => Some(ListKind::Sae),
             ListKind::Events => Some(ListKind::Keyboard(0)),
             ListKind::Keyboard(_) => Some(ListKind::Controls),
             ListKind::PlaceType(_) | ListKind::PlaceLivery(_) | ListKind::PlaceHof(..) => Some(ListKind::PlaceMaker),
@@ -850,18 +889,7 @@ pub(crate) fn run_move(app: &mut App, kind: &ListKind, action: &str, mv: Move) -
                 Some(ListKind::Tours(arg.to_string(), None))
             }
             "free" => {
-                app.duty = None;
-                // unscheduled: the GetTT* callbacks answer ""/0/-1 again, as in Omsi.exe
-                if let Some(p) = app.player.as_mut() {
-                    let h = &mut p.vehicle.host;
-                    h.tt_line.clear();
-                    h.tt_stops.clear();
-                    h.tt_stop_ids.clear();
-                    h.tt_busstop_index = -1;
-                    h.tt_terminus_index = -1;
-                    h.tt_delay = 0.0;
-                }
-                app.service_msg = Some(("Free drive: no duty".into(), 4.0));
+                leave_duty(app);
                 None
             }
             _ => None,
@@ -872,6 +900,52 @@ pub(crate) fn run_move(app: &mut App, kind: &ListKind, action: &str, mv: Move) -
                 let trip = pick.as_ref().filter(|p| p.0 == tour).map(|p| p.2).unwrap_or_else(|| app.schedule.as_ref().map(|s| s.tour_trip_now(line, tour, app.clock.time)).unwrap_or(0));
                 start_duty_at(app, line, tour, trip, chosen, false);
             }
+            None
+        }
+        ListKind::Sae => {
+            match verb {
+                "sae_stops" | "sae_termini" if app.duty.is_none() => {
+                    app.service_msg = Some(("No duty under way".into(), 4.0));
+                    None
+                }
+                "sae_stops" => Some(ListKind::SaeStops),
+                "sae_termini" => Some(ListKind::SaeTermini),
+                "sae_inbox" => {
+                    app.welcome = Some(crate::welcome::Welcome::inbox(&app.inbox));
+                    app.inbox_unread = 0;
+                    None
+                }
+                "sae_call" | "sae_urgent" => {
+                    match (app.phonie.as_mut(), app.lan.as_mut()) {
+                        (Some(r), Some(l)) if r.available() => {
+                            if verb == "sae_urgent" {
+                                r.request_urgent(l);
+                                app.service_msg = Some(("Urgent call sent to the dispatcher".into(), 4.0));
+                            } else if r.can_request() {
+                                r.request(l);
+                                app.service_msg = Some(("Call sent to the dispatcher".into(), 4.0));
+                            } else {
+                                app.service_msg = Some(("A call is already under way".into(), 4.0));
+                            }
+                        }
+                        _ => app.service_msg = Some(("No dispatcher on the radio".into(), 4.0)),
+                    }
+                    None
+                }
+                _ => None,
+            }
+        }
+        ListKind::SaeStops | ListKind::SaeTermini => {
+            let pos = app.player.as_ref().map(|p| p.vehicle.position);
+            let n = arg.trim().parse::<usize>().ok();
+            let (Some(pos), Some(n), Some(d)) = (pos, n, app.duty.as_mut()) else { return None };
+            let r = if verb == "stop" { d.resync_stop(n, pos) } else { d.resync_terminus(n, pos) };
+            app.service_msg = Some(match r {
+                Ok(name) => (format!("{}: {name}", omsi_ui::tr("Duty re-synced")), 4.0),
+                Err(crate::schedule::Resync::TooFar(m)) => (format!("{} ({:.0} m)", omsi_ui::tr("The bus does not stand at this stop"), m), 5.0),
+                Err(crate::schedule::Resync::NoPlace) => ("This stop's place is not known yet: drive nearer".into(), 5.0),
+                Err(crate::schedule::Resync::Unknown) => ("No such stop".into(), 4.0),
+            });
             None
         }
         ListKind::Drivers => {
@@ -2764,10 +2838,29 @@ pub(crate) fn tour_choice(app: &App, k: usize) -> Option<(usize, usize, usize, u
 /// from trip to trip. A driver who picks a timetable from the menu sets the displays at the
 /// bus's own controller, as in OMSI 2 (`typed` false; Shift+U and `--autostart` still type
 /// the duty on request); a dispatcher who gives a player a service sets them for them (`typed`).
+/// No duty any more: free drive. The GetTT* callbacks answer ""/0/-1 again, as in Omsi.exe.
+pub(crate) fn leave_duty(app: &mut App) {
+    app.duty = None;
+    app.duty_given = false;
+    if let Some(p) = app.player.as_mut() {
+        let h = &mut p.vehicle.host;
+        h.tt_line.clear();
+        h.tt_stops.clear();
+        h.tt_stop_ids.clear();
+        h.tt_busstop_index = -1;
+        h.tt_terminus_index = -1;
+        h.tt_delay = 0.0;
+    }
+    app.service_msg = Some(("Free drive: no duty".into(), 4.0));
+}
+
 pub(crate) fn start_duty_at(app: &mut App, line: &str, tour: &str, trip: usize, chosen: usize, typed: bool) {
     // (a duty the player picks; the dispatcher's, `typed`, is given whatever the server says)
     if !typed && app.self_duty_refused() {
         return;
+    }
+    if !typed {
+        app.duty_given = false;
     }
     let now = app.clock.time;
     let at = tour_start_of(app, line, tour);

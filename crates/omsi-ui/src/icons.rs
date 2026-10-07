@@ -45,5 +45,12 @@ mod tests {
         let covered = a.iter().filter(|&&v| v > 128).count();
         assert!(covered > 150 && covered < 900, "{covered}");
         assert!(super::rasterize("no_such_icon", 32).is_none());
+        // a custom one drawn with strokes (the button that takes a duty)
+        let d = super::rasterize("take_duty", 64).unwrap();
+        assert!(d.iter().filter(|&&v| v > 128).count() > 200);
+        let t = super::rasterize("timetable", 64).unwrap();
+        assert!(t.iter().filter(|&&v| v > 128).count() > 200);
+        let m = super::rasterize("inbox", 64).unwrap();
+        assert!(m.iter().filter(|&&v| v > 128).count() > 200);
     }
 }

@@ -61,9 +61,11 @@ impl App {
         if self.welcome.is_some() {
             let (max, page) = self.ui.as_ref().map(|u| (u.welcome_max, u.welcome_view)).unwrap_or((0.0, 300.0));
             let by = match code {
+                // (Enter is the button's - a question's too -, Escape only closes)
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                     if pressed && !repeat {
-                        self.welcome = None;
+                        let action = self.welcome.take().and_then(|w| w.action).filter(|_| code != KeyCode::Escape);
+                        self.welcome_act(action);
                     }
                     return;
                 }
@@ -446,11 +448,6 @@ impl App {
                         self.set_info_bar(!self.info_bar);
                         return;
                     }
-                    // OMSI's `view_set_schedule` (Insert: 210 / 1, the key's state every frame)
-                    KeyCode::Insert if !shift_now && !ctrl => {
-                        self.timetable = !self.timetable;
-                        return;
-                    }
                     _ => {}
                 }
             }
@@ -667,8 +664,10 @@ impl App {
     pub(crate) fn tick_lan(&mut self, dt: f32) {
         let walker = self.walker_pose();
         let Some(lan) = self.lan.as_mut() else {
-            // (the session is over: the plugin is told so)
+            // (the session is over: the plugin is told so; its messages go with it)
             self.voice = None;
+            self.inbox.clear();
+            self.inbox_unread = 0;
             return;
         };
         let duty = self
@@ -790,6 +789,18 @@ impl App {
             return;
         }
         crate::admin::command(self, from, text);
+    }
+
+    /// What the button of the welcome's window does when it asked something.
+    fn welcome_act(&mut self, action: Option<crate::welcome::Action>) {
+        match action {
+            Some(crate::welcome::Action::LeaveDuty) => {
+                if !self.duty_given {
+                    crate::game_lists::leave_duty(self);
+                }
+            }
+            None => {}
+        }
     }
 
     /// A duty the player picks from the menu, refused when the dedicated server joined gives
@@ -1353,6 +1364,9 @@ impl App {
             if pressed {
                 if let Some(ui) = self.ui.as_ref() {
                     if ui.welcome_button_hovered {
+                        let action = self.welcome.take().and_then(|w| w.action);
+                        self.welcome_act(action);
+                    } else if ui.welcome_cancel_hovered {
                         self.welcome = None;
                     } else if let Some(t) = ui.welcome_track.filter(|t| self.cursor.1 >= t[1] && self.cursor.1 <= t[3] && self.cursor.0 >= t[0] - 8.0 && self.cursor.0 <= t[2] + 8.0) {
                         let k = ((self.cursor.1 - t[1]) / (t[3] - t[1]).max(1.0)).clamp(0.0, 1.0);
@@ -1429,6 +1443,62 @@ impl App {
             match hit {
                 Some(at) => self.place_bus_at(at.truncate()),
                 None => self.service_msg = Some(("Ctrl+click on the ground to move the bus there".into(), 3.0)),
+            }
+            return;
+        }
+        // the emergency call's button: every call ends, a dispatcher takes ours
+        if self.ui.as_ref().is_some_and(|u| u.emergency_hovered) {
+            if pressed {
+                if let (Some(r), Some(l)) = (self.phonie.as_mut(), self.lan.as_mut()) {
+                    r.emergency(l);
+                }
+            }
+            return;
+        }
+        // the SAE menu's button: the menu, in the game menu's place
+        if self.ui.as_ref().is_some_and(|u| u.sae_button_hovered) {
+            if pressed {
+                if self.game_menu.is_none() {
+                    self.open_game_menu();
+                }
+                self.open_list(crate::game_lists::ListKind::Sae);
+            }
+            return;
+        }
+        // the timetable's button: the duty's timetable shown or hidden
+        if self.ui.as_ref().is_some_and(|u| u.timetable_button_hovered) {
+            if pressed {
+                self.timetable = !self.timetable;
+            }
+            return;
+        }
+        // the messages' button: the dispatcher's messages, newest first
+        if self.ui.as_ref().is_some_and(|u| u.inbox_button_hovered) {
+            if pressed {
+                self.welcome = Some(crate::welcome::Welcome::inbox(&self.inbox));
+                self.inbox_unread = 0;
+            }
+            return;
+        }
+        // the button that takes a duty: the lines to choose from, in the game menu; with a
+        // duty the player took itself, leaving it (once confirmed); one the dispatcher gave
+        // stays
+        if self.ui.as_ref().is_some_and(|u| u.duty_button_hovered) {
+            if pressed && !self.self_duty_refused() {
+                match self.duty.as_ref() {
+                    Some(_) if self.duty_given => {
+                        self.service_msg = Some(("The dispatcher gave you this duty: ask them to take it back".into(), 6.0));
+                    }
+                    Some(d) => {
+                        self.welcome = Some(crate::welcome::Welcome::leave_duty(&d.line, &d.tour));
+                    }
+                    None => {
+                        if self.game_menu.is_none() {
+                            self.open_game_menu();
+                        }
+                        self.open_list(crate::game_lists::ListKind::Lines);
+                    }
+                }
             }
             return;
         }
@@ -2484,7 +2554,7 @@ impl App {
                         self.chooser = Some(k.min(self.admin_list.as_ref().map(|l| l.len().saturating_sub(1)).unwrap_or(0)));
                     }
                 }
-                None if action != "back" && matches!(kind, crate::game_lists::ListKind::Tours(..) | crate::game_lists::ListKind::Numbers | crate::game_lists::ListKind::Destinations | crate::game_lists::ListKind::RouteNumbers | crate::game_lists::ListKind::Hofs | crate::game_lists::ListKind::Spots) => self.close_game_menu(),
+                None if action != "back" && matches!(kind, crate::game_lists::ListKind::Tours(..) | crate::game_lists::ListKind::Numbers | crate::game_lists::ListKind::Destinations | crate::game_lists::ListKind::RouteNumbers | crate::game_lists::ListKind::Hofs | crate::game_lists::ListKind::Spots | crate::game_lists::ListKind::Sae | crate::game_lists::ListKind::SaeStops | crate::game_lists::ListKind::SaeTermini) => self.close_game_menu(),
                 None => self.menu_top = None,
             }
             return;
@@ -3692,10 +3762,8 @@ impl App {
             // (`[view_schedule]`, `[view_ticketselling]`): the key switches the driver's view
             // to it and back
             "view_set_schedule" | "view_set_ticketselling" => {
+                // (the timetable window: its button beside the navigator alone shows it)
                 let schedule = name == "view_set_schedule";
-                if schedule {
-                    self.timetable = !self.timetable;
-                }
                 if let Some(p) = self.player.as_mut() {
                     let def = &p.vehicle.ty.def;
                     let cam = if schedule { def.view_schedule } else { def.view_ticketselling };
@@ -4610,8 +4678,9 @@ impl crate::App {
             v.insert(at, ("tobus", "Back to my bus"));
             at += 1;
         }
-        // without a bus of one's own: no line to drive
-        if self.player.is_none() {
+        // without a bus of one's own: no line to drive; on a server, the duty is taken with
+        // the button beside the radio's (when the server lets its players take one)
+        if self.player.is_none() || self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client) {
             v.retain(|x| x.0 != "duty");
         }
         // ending the route is offered only while there is one, skipping a stop while its

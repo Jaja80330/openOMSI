@@ -45,16 +45,84 @@ pub fn take() -> Option<String> {
     FETCHED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
-/// The welcome window: the text and how far it is scrolled (px).
+/// The welcome window (or the messages', in the same window): the text, how far it is
+/// scrolled (px) and its button's label.
 pub struct Welcome {
     pub blocks: Vec<Block>,
     pub scroll: f32,
+    pub button: &'static str,
+    /// A question: what its button does (a Cancel button beside it closes the window).
+    pub action: Option<Action>,
+}
+
+/// What a question's button does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// The player leaves the duty taken from its own menu.
+    LeaveDuty,
 }
 
 impl Welcome {
     pub fn new(text: &str) -> Welcome {
-        Welcome { blocks: parse(text), scroll: 0.0 }
+        Welcome { blocks: parse(text), scroll: 0.0, button: "Play", action: None }
     }
+
+    /// Leave the duty taken from the own menu (`line`, `tour`)? Its button leaves it.
+    pub fn leave_duty(line: &str, tour: &str) -> Welcome {
+        let md = format!(
+            "## {}\n\n**{} / {}**\n\n{}\n",
+            omsi_ui::tr("Leave the duty?"),
+            literal(line),
+            literal(tour),
+            literal(&omsi_ui::tr("The duty is free again for the other players and the AI buses."))
+        );
+        Welcome { blocks: parse(&md), scroll: 0.0, button: "Leave the duty", action: Some(Action::LeaveDuty) }
+    }
+
+    /// The dispatcher's messages, newest first, in the welcome's window.
+    pub fn inbox(list: &[InboxMessage]) -> Welcome {
+        Welcome { blocks: parse(&inbox_text(list)), scroll: 0.0, button: "Close", action: None }
+    }
+}
+
+/// A message of the server's dispatcher (`notify`) as it came: when (this device's local
+/// date and time, `dd/mm/yyyy hh:mm`), how urgent, and what it said.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboxMessage {
+    pub at: String,
+    pub urgent: bool,
+    pub text: String,
+}
+
+/// The messages kept (the oldest go).
+pub const INBOX_KEEP: usize = 100;
+
+/// A text as it is in the Markdown: every sign the Markdown reads, escaped.
+fn literal(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    for c in t.chars() {
+        if c.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The messages as the window's Markdown, newest first.
+pub fn inbox_text(list: &[InboxMessage]) -> String {
+    let mut md = format!("# {}\n\n", omsi_ui::tr("Messages"));
+    if list.is_empty() {
+        md.push_str(&format!("*{}*\n", literal(&omsi_ui::tr("No message from the dispatcher yet"))));
+        return md;
+    }
+    for (k, m) in list.iter().rev().enumerate() {
+        if k > 0 {
+            md.push_str("\n---\n\n");
+        }
+        md.push_str(&format!("**{}**{}\n\n{}\n", literal(&m.at), if m.urgent { " · ⚠" } else { "" }, literal(&m.text)));
+    }
+    md
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -507,6 +575,25 @@ mod tests {
         // the words in their order, nothing lost
         let all: String = lines.iter().flat_map(|l| l.runs.iter().map(|r| r.text.as_str())).collect::<Vec<_>>().join("");
         assert_eq!(all.split_whitespace().collect::<String>(), "undeuxtroisquatrecinqsixsepthuitneufdixmotextrêmementlongquinetientpassurunelignemotextrêmementlong");
+    }
+
+    #[test]
+    fn the_messages_newest_first_and_as_they_were_written() {
+        let list = vec![
+            InboxMessage { at: "07/10/2026 21:58".into(), urgent: false, text: "Ligne 14 : *déviation* # rue_du_Moulon".into() },
+            InboxMessage { at: "07/10/2026 22:41".into(), urgent: true, text: "- Retour au dépôt".into() },
+        ];
+        let b = parse(&inbox_text(&list));
+        let texts: Vec<String> = b.iter().map(|b| plain(&b.spans)).collect();
+        assert_eq!(b[0].kind, Kind::Heading(1));
+        assert_eq!(texts[1], "07/10/2026 22:41 · ⚠");
+        // (a message's signs are not Markdown)
+        assert_eq!(b[2].kind, Kind::Para);
+        assert_eq!(texts[2], "- Retour au dépôt");
+        assert_eq!(b[3].kind, Kind::Rule);
+        assert_eq!(texts[5], "Ligne 14 : *déviation* # rue_du_Moulon");
+        assert!(b[5].spans.iter().all(|s| !s.style.italic));
+        assert_eq!(parse(&inbox_text(&[])).len(), 2);
     }
 
     #[test]
