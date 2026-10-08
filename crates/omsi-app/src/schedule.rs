@@ -3551,6 +3551,10 @@ const AT_STOP: f64 = 25.0;
 /// stops some way along its stop's object.
 pub const RESYNC_REACH: f64 = 60.0;
 
+/// How much later than another tour's trip back the duty's own may leave a stop where the
+/// dispatcher turns the bus, for the turn to take the duty's (s).
+const TURN_WAIT: f64 = 15.0 * 60.0;
+
 /// A dispatcher's regulation of a player's duty (`regul …` from the server, see the game's
 /// `admin`): stops by the timetable's numbers in the trip under way.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -3922,40 +3926,7 @@ impl Schedule {
             else {
                 continue;
             };
-            let trip = &self.data.trips[ti];
-            let departure = tt.departure as f64 * 60.0;
-            let times = &self.times[ti][usize::try_from(tt.profile)
-                .unwrap_or(0)
-                .min(self.times[ti].len() - 1)];
-            let stops = trip_stations(trip)
-                .iter()
-                .enumerate()
-                .map(|(i, id)| {
-                    let name = self.station_name(trip, i, *id);
-                    let position = world.object_positions.lock().get(id).map(|p| p.0);
-                    let (arr, dep) = times.stations[i];
-                    PlannedStop {
-                        object_id: *id,
-                        name,
-                        arr: departure + arr,
-                        dep: departure + dep,
-                        position,
-                        dir: StopDir::default(),
-                        stops: times.stops[i],
-                    }
-                })
-                .collect();
-            let mut planned = PlannedTrip {
-                name: trip.name.clone(),
-                line: trip.line.clone(),
-                terminus: trip.terminus.clone(),
-                departure,
-                end: departure + times.duration,
-                stops,
-                regul: TripRegulation::default(),
-            };
-            planned.set_dirs();
-            trips.push(planned);
+            trips.push(self.planned_trip(world, ti, tt.departure as f64 * 60.0, usize::try_from(tt.profile).unwrap_or(0)));
         }
         if trips.is_empty() {
             return Err(format!(
@@ -4027,6 +3998,68 @@ impl Schedule {
             first_update: None,
             heading: 0.0,
         })
+    }
+
+    /// The timetable's trip `ti` leaving at `departure` (s of the day) on its time profile
+    /// `profile`, as a duty plans it.
+    fn planned_trip(&self, world: &World, ti: usize, departure: f64, profile: usize) -> PlannedTrip {
+        let trip = &self.data.trips[ti];
+        let times = &self.times[ti][profile.min(self.times[ti].len() - 1)];
+        let stops = trip_stations(trip)
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let name = self.station_name(trip, i, *id);
+                let position = world.object_positions.lock().get(id).map(|p| p.0);
+                let (arr, dep) = times.stations[i];
+                PlannedStop {
+                    object_id: *id,
+                    name,
+                    arr: departure + arr,
+                    dep: departure + dep,
+                    position,
+                    dir: StopDir::default(),
+                    stops: times.stops[i],
+                }
+            })
+            .collect();
+        let mut planned = PlannedTrip {
+            name: trip.name.clone(),
+            line: trip.line.clone(),
+            terminus: trip.terminus.clone(),
+            departure,
+            end: departure + times.duration,
+            stops,
+            regul: TripRegulation::default(),
+        };
+        planned.set_dirs();
+        planned
+    }
+
+    /// The trips of every tour under way between `from` and `to` (s of the day): those a
+    /// commercial turn may take up when the duty's own do not serve the stop (see
+    /// [`PlayerDuty::regulate`]).
+    pub fn trips_between(&self, world: &World, from: f64, to: f64) -> Vec<PlannedTrip> {
+        let mut out = Vec::new();
+        for l in &self.data.lines {
+            for t in &l.tours {
+                for tt in &t.trips {
+                    let departure = tt.departure as f64 * 60.0;
+                    // (no trip runs longer than a few hours)
+                    if departure > to || departure < from - 4.0 * 3600.0 {
+                        continue;
+                    }
+                    let Some(ti) = self.data.trips.iter().position(|x| x.name.eq_ignore_ascii_case(&tt.trip)) else {
+                        continue;
+                    };
+                    let p = self.planned_trip(world, ti, departure, usize::try_from(tt.profile).unwrap_or(0));
+                    if p.end >= from {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The buses due at one bus stop (map object id) within the next two hours, unsorted, as
@@ -4737,8 +4770,12 @@ impl PlayerDuty {
     /// deadhead run shows (the bus's depot file's, see `deadhead_terminus`). Returns what was
     /// done, for the driver's notice; the stops are the timetable's numbers (those the
     /// server's control room gives).
-    pub fn regulate(&mut self, r: Regulation, depot: &str) -> Result<String, String> {
-        let done = self.regulate_inner(r, depot);
+    ///
+    /// A commercial turn takes up the first trip back through the stop: one of the duty's
+    /// (those before it are given up), or else `others` - the timetable's trips under way,
+    /// see [`Schedule::trips_between`] - when the duty has none soon enough.
+    pub fn regulate(&mut self, r: Regulation, depot: &str, others: &[PlannedTrip]) -> Result<String, String> {
+        let done = self.regulate_inner(r, depot, others);
         if done.is_ok() {
             // (the displays and the IBIS take the trip again)
             self.trip_changed = true;
@@ -4747,7 +4784,43 @@ impl PlayerDuty {
         done
     }
 
-    fn regulate_inner(&mut self, r: Regulation, depot: &str) -> Result<String, String> {
+    /// The first trip back through the duty's stop `k` of the trip under way, for a
+    /// commercial turn there: (in the duty: its index, else in `others`: its index, its stop
+    /// there). A trip back leaves the stop after the bus is due there and goes on to stops
+    /// the bus came by; one of the duty's is preferred unless it leaves much later.
+    fn trip_back(&self, k: usize, others: &[PlannedTrip]) -> Result<(Result<usize, usize>, usize), String> {
+        let cur = self.trip();
+        let here = &cur.stops[k];
+        let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+        let came_by = &cur.stops[..k];
+        let serves = |t: &PlannedTrip| -> Option<usize> {
+            if t.regul.deadhead {
+                return None;
+            }
+            let j = t.stops.iter().position(|s| same(&s.name, &here.name) || s.object_id == here.object_id && s.object_id != 0)?;
+            let back = t.stops[j + 1..].iter().any(|s| came_by.iter().any(|c| same(&c.name, &s.name)));
+            (j + 1 < t.stops.len() && back && t.stops[j].dep >= here.arr - 60.0).then_some(j)
+        };
+        let mine = (self.trip_index + 1..self.trips.len()).find_map(|i| serves(&self.trips[i]).map(|j| (i, j)));
+        // (not one the duty drives anyway, by its name and its time)
+        let theirs = others
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !self.trips.iter().any(|d| d.name == t.name && (d.departure - t.departure).abs() < 1.0))
+            .filter_map(|(i, t)| serves(t).map(|j| (i, j)))
+            .min_by(|a, b| {
+                let key = |&(i, j): &(usize, usize)| (others[i].line != cur.line, others[i].stops[j].dep);
+                key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        match (mine, theirs) {
+            (Some((i, j)), Some((o, oj))) if self.trips[i].stops[j].dep > others[o].stops[oj].dep + TURN_WAIT => Ok((Err(o), oj)),
+            (Some((i, j)), _) => Ok((Ok(i), j)),
+            (None, Some((o, oj))) => Ok((Err(o), oj)),
+            (None, None) => Err(format!("no trip back serves {}", here.name.trim())),
+        }
+    }
+
+    fn regulate_inner(&mut self, r: Regulation, depot: &str, others: &[PlannedTrip]) -> Result<String, String> {
         let offset = self.trip().regul.stop_offset;
         let local = |k: usize| k.checked_sub(offset).ok_or_else(|| "this stop is behind the bus".to_string());
         match r {
@@ -4761,21 +4834,31 @@ impl PlayerDuty {
                     return Err("this stop is behind the bus".into());
                 }
                 let next_i = self.trip_index + 1;
-                if next_i >= self.trips.len() {
-                    return Err("no trip after this one".into());
-                }
                 let here = self.trip().stops[k].clone();
-                // where the next trip is taken up: the same stop (the other side of the
-                // street, by its name) for a commercial turn; the stop asked for after a
-                // deadhead run
+                // where the next trip is taken up: for a commercial turn, the first trip back
+                // through the stop (the other side of the street, by its name), the duty's
+                // trips before it given up - or one of another tour put in the duty; the stop
+                // asked for after a deadhead run
                 let j = match r {
-                    Regulation::TurnEmpty { resume, .. } => resume.checked_sub(self.trips[next_i].regul.stop_offset).filter(|j| *j < self.trips[next_i].stops.len()).ok_or("no such stop on the next trip")?,
-                    _ => self.trips[next_i]
-                        .stops
-                        .iter()
-                        .position(|s| s.object_id == here.object_id && s.object_id != 0)
-                        .or_else(|| self.trips[next_i].stops.iter().position(|s| s.name.trim().eq_ignore_ascii_case(here.name.trim())))
-                        .ok_or_else(|| format!("the next trip does not serve {}", here.name.trim()))?,
+                    Regulation::TurnEmpty { resume, .. } => {
+                        if next_i >= self.trips.len() {
+                            return Err("no trip after this one".into());
+                        }
+                        resume.checked_sub(self.trips[next_i].regul.stop_offset).filter(|j| *j < self.trips[next_i].stops.len()).ok_or("no such stop on the next trip")?
+                    }
+                    _ => match self.trip_back(k, others)? {
+                        (Ok(i), j) => {
+                            self.trips.drain(next_i..i);
+                            j
+                        }
+                        (Err(o), j) => {
+                            let back = others[o].clone();
+                            // (the duty's trips it overlaps go: the bus drives this one)
+                            let keep = self.trips[next_i..].iter().position(|t| t.departure >= back.end).map_or(self.trips.len(), |p| next_i + p);
+                            self.trips.splice(next_i..keep, [back]);
+                            j
+                        }
+                    },
                 };
                 if j + 1 >= self.trips[next_i].stops.len() {
                     return Err("the next trip would have no stop left".into());
@@ -4798,7 +4881,8 @@ impl PlayerDuty {
                     self.trips.insert(next_i, leg);
                     return Ok(format!("{} {} · {} {take_up} · {at}", omsi_ui::tr("Turn at"), here.name.trim(), omsi_ui::tr("then empty to")));
                 }
-                Ok(format!("{} {} · {} {at}", omsi_ui::tr("Commercial turn at"), here.name.trim(), omsi_ui::tr("next trip from there at")))
+                let next = &self.trips[next_i];
+                Ok(format!("{} {} · {} {at} ({} {} → {})", omsi_ui::tr("Commercial turn at"), here.name.trim(), omsi_ui::tr("next trip from there at"), omsi_ui::tr("Line"), next.line.trim(), next.terminus.trim()))
             }
             Regulation::Deadhead { trips } => {
                 let target = self.trip_index + trips.max(1);
@@ -6272,21 +6356,50 @@ pub(crate) mod tests {
 
         // a commercial turn at C: the trip ends there, the way back begins at C at 700 s
         let mut d = duty_of(vec![out.clone(), back.clone(), again.clone()]);
-        assert!(d.regulate(Regulation::Turn { stop: 2 }, "HLP").is_ok());
+        assert!(d.regulate(Regulation::Turn { stop: 2 }, "HLP", &[]).is_ok());
         assert_eq!(d.trips[0].stops.len(), 3);
         assert_eq!((d.trips[1].stops[0].name.as_str(), d.trips[1].departure, d.trips[1].stops.len()), ("C", 700.0, 3));
         // (the control room still knows the trip by its timetable's departure and stops)
         d.set_trip(1);
         let p = d.progress(650.0);
         assert_eq!((p.departure, p.stop), (600, 1));
+
+        // the next trip is another line's, elsewhere: the duty's trip back after it is taken
+        // up, the one between given up
+        let mut other = named(planned(600.0, &[(0.0, 650.0, 650.0), (500.0, 750.0, 750.0)]), &["X", "Y"], 300);
+        other.name = "other".into();
+        other.line = "9".into();
+        let later = |t: &PlannedTrip, by: f64| {
+            let mut t = t.clone();
+            t.departure += by;
+            t.end += by;
+            for s in &mut t.stops {
+                s.arr += by;
+                s.dep += by;
+            }
+            t
+        };
+        let mut d = duty_of(vec![out.clone(), other.clone(), later(&back, 300.0)]);
+        assert!(d.regulate(Regulation::Turn { stop: 2 }, "HLP", &[]).is_ok());
+        assert_eq!(d.trips.len(), 2);
+        assert_eq!((d.trips[1].stops[0].name.as_str(), d.trips[1].departure), ("C", 1000.0));
+        // ... and none in the duty: another tour's, the duty's trip it overlaps given up
+        let mut d = duty_of(vec![out.clone(), other.clone(), again.clone()]);
+        assert_eq!(d.regulate(Regulation::Turn { stop: 2 }, "HLP", &[]), Err("no trip back serves C".into()));
+        // (an outbound trip through C does not take the bus back)
+        let theirs = [later(&out, 100.0), back.clone()];
+        assert!(d.regulate(Regulation::Turn { stop: 2 }, "HLP", &theirs).is_ok());
+        assert_eq!(d.trips.iter().map(|t| t.stops[0].name.as_str()).collect::<Vec<_>>(), ["A", "C", "A"]);
+        assert_eq!(d.trips[1].departure, 700.0);
+
         // a stop behind the bus: refused
         let mut d = duty_of(vec![out.clone(), back.clone()]);
         d.next_stop = 3;
-        assert!(d.regulate(Regulation::Turn { stop: 1 }, "HLP").is_err());
+        assert!(d.regulate(Regulation::Turn { stop: 1 }, "HLP", &[]).is_err());
 
         // a turn at B, then empty to the way back's C
         let mut d = duty_of(vec![out.clone(), back.clone(), again.clone()]);
-        assert!(d.regulate(Regulation::TurnEmpty { stop: 1, resume: 1 }, "HLP").is_ok());
+        assert!(d.regulate(Regulation::TurnEmpty { stop: 1, resume: 1 }, "HLP", &[]).is_ok());
         assert_eq!(d.trips.len(), 4);
         assert!(d.trips[1].regul.deadhead && d.trips[1].line.is_empty());
         assert_eq!(d.trips[1].stops[0].name, "C");
@@ -6294,7 +6407,7 @@ pub(crate) mod tests {
 
         // a deadhead run past the way back, to the next outbound trip's first stop
         let mut d = duty_of(vec![out.clone(), back.clone(), again.clone()]);
-        assert!(d.regulate(Regulation::Deadhead { trips: 2 }, "Haut-le-pied").is_ok());
+        assert!(d.regulate(Regulation::Deadhead { trips: 2 }, "Haut-le-pied", &[]).is_ok());
         assert_eq!(d.trips.len(), 3);
         assert_eq!(d.trip_index, 1);
         assert!(d.trip().regul.deadhead);
@@ -6309,7 +6422,7 @@ pub(crate) mod tests {
 
         // two minutes later from C on
         let mut d = duty_of(vec![out.clone(), back.clone()]);
-        assert!(d.regulate(Regulation::Shift { stop: 2, secs: 120.0 }, "").is_ok());
+        assert!(d.regulate(Regulation::Shift { stop: 2, secs: 120.0 }, "", &[]).is_ok());
         let t = &d.trips[0];
         assert_eq!((t.stops[1].dep, t.stops[2].arr, t.stops[2].dep, t.stops[3].arr, t.end), (100.0, 200.0, 320.0, 420.0, 420.0));
 
@@ -6317,11 +6430,11 @@ pub(crate) mod tests {
         let mut d = duty_of(vec![out.clone(), back.clone()]);
         d.next_stop = 3;
         d.done = true;
-        assert!(d.regulate(Regulation::EarlyDeparture { secs: 180.0 }, "").is_ok());
+        assert!(d.regulate(Regulation::EarlyDeparture { secs: 180.0 }, "", &[]).is_ok());
         assert_eq!((d.trips[1].departure, d.trips[1].stops[3].arr), (420.0, 720.0));
         // a trip under way cannot leave earlier
         let mut d = duty_of(vec![out, back]);
-        assert!(d.regulate(Regulation::EarlyDeparture { secs: 60.0 }, "").is_err());
+        assert!(d.regulate(Regulation::EarlyDeparture { secs: 60.0 }, "", &[]).is_err());
     }
 
     /// #1015: the next stop given up from the menu, and at the trip's last one the trip.

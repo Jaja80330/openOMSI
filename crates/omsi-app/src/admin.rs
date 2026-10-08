@@ -434,10 +434,16 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
         // the host hears `regul-ok <what was done>` or `regul-no <why>`
         "regul" if from == 1 => {
             let depot = crate::schedule::deadhead_terminus(app.player.as_ref().and_then(|p| p.vehicle.host.hof.as_deref()));
-            let reply = match (crate::schedule::Regulation::parse(arg), app.duty.as_mut()) {
+            let r = crate::schedule::Regulation::parse(arg);
+            // (a commercial turn may take up another tour's trip back: those under way now)
+            let others = match (r, app.schedule.as_ref(), app.world.as_ref()) {
+                (Some(crate::schedule::Regulation::Turn { .. }), Some(s), Some(w)) => s.trips_between(w, app.clock.time, app.clock.time + 3.0 * 3600.0),
+                _ => Vec::new(),
+            };
+            let reply = match (r, app.duty.as_mut()) {
                 (None, _) => "regul-no malformed".to_string(),
                 (_, None) => "regul-no no duty".to_string(),
-                (Some(r), Some(d)) => match d.regulate(r, &depot) {
+                (Some(r), Some(d)) => match d.regulate(r, &depot, &others) {
                     Ok(what) => {
                         log::info!("LAN: the server's dispatch regulates our duty: {what}");
                         let text = format!("{}: {what}", omsi_ui::tr("Regulation"));
