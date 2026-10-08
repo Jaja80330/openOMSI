@@ -260,6 +260,19 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
         }
         y += ROW + 10.0;
     }
+    // joining a session: no duty chosen here - it is taken in the game (the button beside the
+    // radio's) or given by the dispatcher; the player may start on foot
+    if l.state.joining() {
+        let mut v = l.state.choice.on_foot;
+        if l.ui.toggle("onfoot-mp", Rect::new(body.x, y, body.w, ROW), &mut v, "Start on foot") {
+            l.state.choice.on_foot = v;
+            l.state.touched();
+        }
+        y += ROW + 10.0;
+        l.ui.paragraph("In multiplayer the duty is taken in the game: with the duty button beside the radio's when the server allows it, or given by the dispatcher.", Vec2::new(body.x, y), body.w, 12.5, Weight::Regular, TEXT_DIM);
+        entry_select(l, body, body.bottom() - ROW, true);
+        return;
+    }
     let mut free = l.state.choice.free;
     if l.ui.toggle("free", Rect::new(body.x, y, body.w, ROW), &mut free, "Free drive (no timetable duty)") {
         l.state.choice.free = free;
@@ -536,6 +549,8 @@ fn foot(l: &mut Launcher, f: Rect, tab: usize) {
     } else {
         let label = if running > 0 && l.state.second_armed.map(|t| t.elapsed().as_secs() < 6).unwrap_or(false) {
             "Start another game"
+        } else if l.state.joining() {
+            "Join the session"
         } else if (l.state.choice.free || l.state.choice.line.is_none()) && l.state.joined_server.is_none() {
             "Drive"
         } else {

@@ -2393,7 +2393,8 @@ impl ApplicationHandler for App {
                             welcome: self.welcome.as_ref().map(|w| (w.blocks.as_slice(), w.scroll, w.button, w.action.is_some(), w.pictures.as_slice())),
                             inbox_button: (seated && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)).then_some(self.inbox_unread),
                             timetable_button: (seated && self.duty.is_some()).then_some(self.timetable),
-                            duty_button: (seated && self.self_duty == Some(true) && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)).then_some(self.duty.is_some()),
+                            // (a server that says nothing - a host's code, an older server - lets its players take one)
+                            duty_button: (seated && self.self_duty != Some(false) && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)).then_some(self.duty.is_some()),
                             sae_button: seated && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client),
                         };
                         ui.draw_at(r, scene, &frame, dt, hud[0]);

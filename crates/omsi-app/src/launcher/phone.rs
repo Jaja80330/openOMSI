@@ -162,6 +162,9 @@ fn card(l: &mut Launcher, name: &str, r: Rect, icon: &str, label: &str, value: &
 }
 
 fn duty_text(l: &Launcher) -> String {
+    if l.state.joining() {
+        return "Taken in the game".into();
+    }
     match (&l.state.choice.line, &l.state.choice.tour, l.state.choice.free) {
         (_, _, true) | (None, _, _) => "Free drive".into(),
         (Some(line), Some(t), _) => format!("Line {line} · tour {t}"),
@@ -276,6 +279,8 @@ fn play(l: &mut Launcher, body: Rect) {
         if card(l, id, Rect::new(col.x, y, col.w, card_h), icon, label, &value, warn) {
             if s == Sheet::Time && l.state.joined_server.is_some() {
                 l.state.set_status("On a server its clock and weather are the server's", false);
+            } else if s == Sheet::Duty && l.state.joining() {
+                l.state.set_status("In multiplayer the duty is taken in the game: with the duty button beside the radio's when the server allows it, or given by the dispatcher.", false);
             } else {
                 open(l, s);
             }

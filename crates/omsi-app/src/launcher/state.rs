@@ -655,9 +655,17 @@ impl State {
         }
     }
 
+    /// The game joins another's session (a server, a host's code): the duty is taken in the
+    /// game then (its button, or the dispatcher), not chosen here.
+    pub fn joining(&self) -> bool {
+        self.choice.lan_mode == "join"
+    }
+
     /// The duty as the backend takes it.
     pub fn duty(&self) -> core::Duty {
         let c = &self.choice;
+        // (joining a session: no duty from here, the bus stands where it was put)
+        let free = c.free || self.joining();
         let lan = match c.lan_mode.as_str() {
             "host" => "host".to_string(),
             "join" => format!("join:{}", c.lan_addr.trim()),
@@ -680,17 +688,17 @@ impl State {
             number: Some(c.number.clone()).filter(|n| !n.trim().is_empty()),
             hof: Some(c.hof.clone()).filter(|p| !p.is_empty()),
             entry: Some(c.entry),
-            line: if c.free { None } else { c.line.clone() },
-            tour: if c.free { None } else { c.tour.clone() },
-            trip: if c.free { None } else { self.picked_trip().map(|i| i.to_string()) },
-            whole_tour: !c.free && self.picked_trip().is_some(),
+            line: if free { None } else { c.line.clone() },
+            tour: if free { None } else { c.tour.clone() },
+            trip: if free { None } else { self.picked_trip().map(|i| i.to_string()) },
+            whole_tour: !free && self.picked_trip().is_some(),
             time: format!("{:02}:{:02}", c.time / 60, c.time % 60),
             date: Some(c.date.clone()),
             weather: Some(c.weather.clone()).filter(|w| !w.is_empty()),
             traffic: Some(c.traffic.round() as u32),
             passengers: Some(c.passengers),
             schedule: Some(c.schedule),
-            autostart: Some(c.autostart),
+            autostart: Some(c.autostart && !self.joining()),
             on_foot: Some(c.on_foot),
             profile: Some(self.config.profile.clone()).filter(|p| !p.is_empty()),
             lan: Some(lan),
