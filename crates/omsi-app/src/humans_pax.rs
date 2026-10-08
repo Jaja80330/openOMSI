@@ -2511,6 +2511,7 @@ mod tests {
             departure: 8.0 * 3600.0,
             end: 9.0 * 3600.0,
             stops: ["Bauernhof", "Depot", "Kirche", "Endstation"].into_iter().map(trip).collect(),
+            regul: Default::default(),
         };
         // (named as the timetable's Busstops.cfg names the objects; one it does not know by
         // its id)

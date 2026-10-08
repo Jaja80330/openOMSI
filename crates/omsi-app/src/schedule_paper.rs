@@ -434,6 +434,7 @@ mod tests {
                 stop(3, "Dorf", t(11.0, 55.0), t(11.0, 57.0)),
                 stop(4, "Bauernhof", t(11.0, 59.0), t(12.0, 1.0)),
             ],
+            regul: Default::default(),
         };
         let (title, rows) = paper_content("76", "1", &[current], 0, ("Arrival ", "Depart. "));
         assert_eq!(title, "76 - Bauernhof - 1");

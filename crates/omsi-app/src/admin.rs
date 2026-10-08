@@ -428,6 +428,32 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
                 l.command(1, &reply);
             }
         }
+        // (host → us) the server's dispatch regulates our duty: `regul turn <stop>`, `regul
+        // turn-empty <stop> <resume>`, `regul deadhead [<trips>]`, `regul shift <stop> <secs>`,
+        // `regul early <secs>` (`schedule::Regulation`); the driver is told what to do, and
+        // the host hears `regul-ok <what was done>` or `regul-no <why>`
+        "regul" if from == 1 => {
+            let depot = crate::schedule::deadhead_terminus(app.player.as_ref().and_then(|p| p.vehicle.host.hof.as_deref()));
+            let reply = match (crate::schedule::Regulation::parse(arg), app.duty.as_mut()) {
+                (None, _) => "regul-no malformed".to_string(),
+                (_, None) => "regul-no no duty".to_string(),
+                (Some(r), Some(d)) => match d.regulate(r, &depot) {
+                    Ok(what) => {
+                        log::info!("LAN: the server's dispatch regulates our duty: {what}");
+                        let text = format!("{}: {what}", omsi_ui::tr("Regulation"));
+                        crate::ui::push_notice(&mut app.notices, crate::ui::Notice { kind: crate::ui::NoticeKind::Warn, text: text.clone(), left: 12.0, total: 12.0 });
+                        let at = crate::real_time::now().map(|t| format!("{:02}/{:02}/{} {:02}:{:02}", t.day, t.month, t.year, (t.secs / 3600.0) as u32, (t.secs / 60.0) as u32 % 60)).unwrap_or_default();
+                        app.inbox.push(crate::welcome::InboxMessage { at, urgent: true, text });
+                        app.inbox_unread += 1;
+                        format!("regul-ok {what}")
+                    }
+                    Err(e) => format!("regul-no {e}"),
+                },
+            };
+            if let Some(l) = app.lan.as_mut() {
+                l.command(1, &reply);
+            }
+        }
         // (host → us) a notification over the navigator for a few seconds: `notify <id>
         // <seconds> <info|warn|alert> <text>`; the host hears that it was shown (`notify-seen
         // <id>`): a game that does not know `notify` stays silent, and the host can say it in
@@ -641,6 +667,14 @@ pub(crate) fn server_command(lan: &mut LanSession, from: u32, text: &str, adm: &
                         }
                     }
                 }
+                // a regulation of one player's duty: `regul <id> <what>` (see `command`)
+                "regul" => {
+                    if let Some((who, rest)) = a.trim().split_once(' ') {
+                        if let (Ok(id), Some(_)) = (who.parse::<u32>(), crate::schedule::Regulation::parse(rest)) {
+                            lan.command(id, &format!("regul {}", rest.trim()));
+                        }
+                    }
+                }
                 // a notification on one player's screen, or everybody's: `notify <id|all> <notice
                 // id> <seconds> <info|warn|alert> <text>` (a game that shows it answers
                 // `notify-seen <notice id>`)
@@ -721,6 +755,9 @@ pub(crate) fn server_command(lan: &mut LanSession, from: u32, text: &str, adm: &
         "duty-off-ok" => log::info!("server: player {from} left the duty"),
         "duty-off-none" => log::info!("server: player {from} had no duty to leave"),
         "duty-ok" => log::info!("server: player {from} took duty {}", arg.trim()),
+        // a player's game regulated its duty as the dispatch asked (`regul`), or could not
+        "regul-ok" => log::info!("server: player {from} regulated: {}", arg.trim()),
+        "regul-no" => log::info!("server: player {from} could not regulate: {}", arg.trim()),
         "duty-no" => log::info!("server: player {from} could not take the duty: {}", arg.trim()),
         // a player's game showed a notification (`notify`): said for the tool that sent it
         "notify-seen" => log::info!("server: player {from} saw notice {}", arg.trim()),

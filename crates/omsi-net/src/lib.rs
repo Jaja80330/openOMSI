@@ -947,13 +947,16 @@ pub struct DutyProgress {
     /// The trip has reached its terminus (the delay is then the next trip's).
     pub done: bool,
     pub delay: i32,
+    /// The bus runs empty (a dispatcher's deadhead run) to the trip's `stop`, where it
+    /// takes up the trip.
+    pub deadhead: bool,
 }
 
 impl DutyProgress {
     /// As an `INFO` field: `departure,stop,flags,delay,trip` (the delay to 5 s: the field
     /// changes, and the `INFO` goes, no more than every few seconds).
     pub fn encode(&self) -> String {
-        let flags = self.at_stop as u8 | (self.done as u8) << 1;
+        let flags = self.at_stop as u8 | (self.done as u8) << 1 | (self.deadhead as u8) << 2;
         let delay = (self.delay as f32 / 5.0).round() as i32 * 5;
         format!("{},{},{flags},{delay},{}", self.departure.min(2 * 86400), self.stop.min(9999), clean_text(&self.trip, MAX_FIELD))
     }
@@ -964,7 +967,7 @@ impl DutyProgress {
         let stop = it.next()?.trim().parse::<u32>().ok().filter(|s| *s <= 9999)?;
         let flags = it.next()?.trim().parse::<u8>().ok()?;
         let delay = it.next()?.trim().parse::<i32>().ok().filter(|d| d.abs() <= 86400)?;
-        Some(DutyProgress { trip: clean_text(it.next().unwrap_or(""), MAX_FIELD), departure, stop, at_stop: flags & 1 != 0, done: flags & 2 != 0, delay })
+        Some(DutyProgress { trip: clean_text(it.next().unwrap_or(""), MAX_FIELD), departure, stop, at_stop: flags & 1 != 0, done: flags & 2 != 0, delay, deadhead: flags & 4 != 0 })
     }
 }
 

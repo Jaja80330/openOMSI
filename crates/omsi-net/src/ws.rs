@@ -165,13 +165,14 @@ impl PlayerInfo {
         };
         let progress = match &self.progress {
             Some(p) => format!(
-                "{{\"trip\":{},\"departure\":{},\"stop\":{},\"at_stop\":{},\"done\":{},\"delay_s\":{}}}",
+                "{{\"trip\":{},\"departure\":{},\"stop\":{},\"at_stop\":{},\"done\":{},\"delay_s\":{},\"deadhead\":{}}}",
                 json_str(&p.trip),
                 p.departure,
                 p.stop,
                 p.at_stop,
                 p.done,
-                p.delay
+                p.delay,
+                p.deadhead
             ),
             None => "null".into(),
         };
@@ -1189,10 +1190,10 @@ mod tests {
         assert!(j.contains("\"id\":4,") && j.contains("\"x\":null") && j.ends_with("\"lat\":null,\"lon\":null}]"), "{j}");
         assert_eq!(players_json(&[]), "[]");
         // the fleet number and the duty as the player's game says them
-        let d = PlayerInfo { number: "4521".into(), tour: "37/2".into(), progress: Some(crate::DutyProgress { trip: "37_Hbf".into(), departure: 29520, stop: 3, at_stop: false, done: false, delay: 125 }), ..p };
+        let d = PlayerInfo { number: "4521".into(), tour: "37/2".into(), progress: Some(crate::DutyProgress { trip: "37_Hbf".into(), departure: 29520, stop: 3, at_stop: false, done: false, delay: 125, deadhead: false }), ..p };
         let j = players_json(&[d]);
         assert!(j.contains("\"number\":\"4521\""), "{j}");
-        assert!(j.contains("\"progress\":{\"trip\":\"37_Hbf\",\"departure\":29520,\"stop\":3,\"at_stop\":false,\"done\":false,\"delay_s\":125}"), "{j}");
+        assert!(j.contains("\"progress\":{\"trip\":\"37_Hbf\",\"departure\":29520,\"stop\":3,\"at_stop\":false,\"done\":false,\"delay_s\":125,\"deadhead\":false}"), "{j}");
         assert!(players_json(&[PlayerInfo::default()]).contains("\"progress\":null"));
     }
 

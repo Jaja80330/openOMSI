@@ -93,13 +93,13 @@ fn info_carries_the_fleet_number_and_the_duty_and_an_older_info_has_neither() {
     let mut p = pose(1.5);
     p.tour = "EXPRESS 91.06/06-536".into();
     p.number = "4521".into();
-    p.progress = Some(DutyProgress { trip: "9106C_AMHP_MASSY".into(), departure: 8 * 3600 + 12 * 60, stop: 7, at_stop: true, done: false, delay: -62 });
+    p.progress = Some(DutyProgress { trip: "9106C_AMHP_MASSY".into(), departure: 8 * 3600 + 12 * 60, stop: 7, at_stop: true, done: false, delay: -62, deadhead: true });
     p.freetex = vec![r"..\..\Anzeigen\x.tga".into()];
     let text = p.encode_info();
     let q = Pose::decode_info(&text.split('|').collect::<Vec<_>>()).unwrap();
     assert_eq!(q.number, "4521");
     let d = q.progress.clone().unwrap();
-    assert_eq!((d.trip.as_str(), d.departure, d.stop, d.at_stop, d.done), ("9106C_AMHP_MASSY", 29520, 7, true, false));
+    assert_eq!((d.trip.as_str(), d.departure, d.stop, d.at_stop, d.done, d.deadhead), ("9106C_AMHP_MASSY", 29520, 7, true, false, true));
     // (to 5 s)
     assert_eq!(d.delay, -60);
     assert_eq!(q.freetex, p.freetex);
@@ -116,7 +116,7 @@ fn info_carries_the_fleet_number_and_the_duty_and_an_older_info_has_neither() {
     assert!(DutyProgress::decode("x,1,0,0,a").is_none());
     assert!(DutyProgress::decode("1,2,0").is_none());
     // and with everything else at its longest, the INFO fits one datagram with both
-    p.progress = Some(DutyProgress { trip: "é".repeat(80), departure: 86399, stop: 9999, at_stop: true, done: true, delay: -86400 });
+    p.progress = Some(DutyProgress { trip: "é".repeat(80), departure: 86399, stop: 9999, at_stop: true, done: true, delay: -86400, deadhead: true });
     p.number = "9".repeat(40);
     p.freetex = (0..MAX_FREETEX).map(|k| format!("{k}{}", "é".repeat(200))).collect();
     p.bus = format!("Vehicles/{}/{}.bus", "Ü".repeat(60), "b".repeat(120));
