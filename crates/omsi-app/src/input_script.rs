@@ -712,8 +712,8 @@ impl App {
         self.tick_self_duty(dt);
         // the server's welcome, once the world and the bus are there
         if self.welcome.is_none() && self.world.is_some() && self.player.is_some() {
-            if let Some(text) = crate::welcome::take() {
-                self.welcome = Some(crate::welcome::Welcome::new(&text));
+            if let Some((text, pictures)) = crate::welcome::take() {
+                self.welcome = Some(crate::welcome::Welcome::with_pictures(&text, pictures));
             }
         }
     }

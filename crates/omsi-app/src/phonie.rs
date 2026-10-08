@@ -177,7 +177,16 @@ struct Call {
     driver: Option<(u32, Instant)>,
     /// A driver's emergency call (`radio emergency`).
     emergency: bool,
+    /// When it began, and when somebody last held a push-to-talk key in it: a call ends by
+    /// itself `CALL_IDLE` after that, and `CALL_MAX` after it began at the latest.
+    started: Instant,
+    last_talk: Instant,
 }
+
+/// A call nobody talks in (no push-to-talk key held on either side) for this long ends.
+const CALL_IDLE: Duration = Duration::from_secs(10);
+/// A call ends this long after it began, talked in or not.
+const CALL_MAX: Duration = Duration::from_secs(60);
 
 impl Call {
     fn talk(&self) -> Talk {
@@ -278,7 +287,7 @@ impl RadioServer {
         log::warn!("radio: player {from} makes the emergency call: every call ends, console {console} takes it");
         self.calls.clear();
         self.requests.retain(|r| r.player != from);
-        self.calls.push(Call { console, kind: CallKind::Individual, members: vec![from], since: unix_now(), dispatcher: None, driver: None, emergency: true });
+        self.calls.push(Call { console, kind: CallKind::Individual, members: vec![from], since: unix_now(), dispatcher: None, driver: None, emergency: true, started: Instant::now(), last_talk: Instant::now() });
         dispatch::to_consoles(ConsoleOut::Text(json!({"t": "emergency", "player": from, "console": console}).to_string()));
         self.refresh = 0.0;
         self.console_refresh = 0.0;
@@ -373,7 +382,13 @@ impl RadioServer {
             dispatch::to_console(console, ConsoleOut::Binary(out));
             self.to_monitors(console, from, &frame);
         }
+        for (console, why) in self.release_calls(Instant::now()) {
+            dispatch::to_console(console, ConsoleOut::Text(json!({"t": "ended", "why": why}).to_string()));
+            self.refresh = 0.0;
+            self.console_refresh = 0.0;
+        }
         // every player: where its radio stands (at once when it changed)
+
         let on_duty = !self.consoles.is_empty() || dispatch::console_count() > 0;
         self.refresh -= dt;
         let due = self.refresh <= 0.0;
@@ -426,6 +441,28 @@ impl RadioServer {
         }
     }
 
+    /// The calls that end by themselves at `now`: nobody talked in them for `CALL_IDLE`, or
+    /// `CALL_MAX` is up. Their consoles and why (`idle`, `max`).
+    fn release_calls(&mut self, now: Instant) -> Vec<(u64, &'static str)> {
+        let mut ended: Vec<(u64, &'static str)> = Vec::new();
+        self.calls.retain_mut(|c| {
+            if c.talk() != Talk::Nobody {
+                c.last_talk = now;
+            }
+            let why = if now.duration_since(c.started) >= CALL_MAX {
+                "max"
+            } else if now.duration_since(c.last_talk) >= CALL_IDLE {
+                "idle"
+            } else {
+                return true;
+            };
+            log::info!("radio: console {}'s {} call ends by itself ({})", c.console, c.kind.word(), if why == "max" { "a minute is up" } else { "nobody talked for 10 s" });
+            ended.push((c.console, why));
+            false
+        });
+        ended
+    }
+
     /// A console's message: `{"t": "call" | "end" | "take" | "drop" | "ptt" | "monitor", …}`.
     /// (`drivers`: the players a call can reach, those driving a bus of their own)
     fn console_command(&mut self, console: u64, text: &str, drivers: &[u32]) {
@@ -462,7 +499,7 @@ impl RadioServer {
                 }
                 log::info!("radio: console {console}: {} call to {:?}", kind.word(), members);
                 self.calls.retain(|c| c.console != console);
-                self.calls.push(Call { console, kind, members, since: unix_now(), dispatcher: None, driver: None, emergency: false });
+                self.calls.push(Call { console, kind, members, since: unix_now(), dispatcher: None, driver: None, emergency: false, started: Instant::now(), last_talk: Instant::now() });
             }
             "end" => {
                 if let Some(c) = self.calls.iter().find(|c| c.console == console) {
@@ -1048,6 +1085,23 @@ mod tests {
         // no console left: no dispatcher on duty
         run(&mut host, &mut driver, &mut radio, 5, &mut told, &mut to_console);
         assert_eq!(last_state(&told), "state none - none off off -");
+    }
+
+    /// A call ends by itself: 10 s without anybody's key down, a minute at the latest.
+    #[test]
+    fn a_call_ends_by_itself_when_quiet_or_long() {
+        let mut radio = RadioServer { requests: Vec::new(), calls: Vec::new(), consoles: Vec::new(), told: Default::default(), refresh: 0.0, console_state: String::new(), console_refresh: 0.0, emergency: false, drivers: Vec::new() };
+        let t0 = Instant::now();
+        let call = |console: u64| Call { console, kind: CallKind::Individual, members: vec![console as u32], since: 0, dispatcher: None, driver: None, emergency: false, started: t0, last_talk: t0 };
+        radio.calls = vec![call(1), call(2)];
+        assert!(radio.release_calls(t0 + Duration::from_secs(9)).is_empty());
+        // console 2 talks (its key held): only console 1's quiet call ends
+        radio.calls[1].dispatcher = Some(Instant::now() + Duration::from_secs(120));
+        assert_eq!(radio.release_calls(t0 + Duration::from_secs(10)), [(1, "idle")]);
+        // talked in all along: a minute at the latest
+        assert!(radio.release_calls(t0 + Duration::from_secs(59)).is_empty());
+        assert_eq!(radio.release_calls(t0 + Duration::from_secs(60)), [(2, "max")]);
+        assert!(radio.calls.is_empty());
     }
 
     #[test]

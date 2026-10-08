@@ -480,7 +480,7 @@ pub struct Frame<'a> {
     pub timetable_button: Option<bool>,
     /// The server's welcome (its blocks), how far it is scrolled (px) and its button's label
     /// (the messages' window as well).
-    pub welcome: Option<(&'a [crate::welcome::Block], f32, &'a str, bool)>,
+    pub welcome: Option<(&'a [crate::welcome::Block], f32, &'a str, bool, &'a [crate::welcome::Picture])>,
     /// What kind of menu the lines belong to.
     pub menu_kind: MenuKind,
     /// The open list's title and the small line above it (the line a tour list is of).
@@ -575,6 +575,8 @@ pub struct Ui {
     pub welcome_track: Option<[f32; 4]>,
     pub welcome_max: f32,
     pub welcome_view: f32,
+    /// The welcome's pictures on the GPU, by their `src` and pixels.
+    welcome_tex: hashbrown::HashMap<(String, usize), TextureId>,
     /// The loading screen's bar as shown (it eases to the progress), and when it was drawn.
     load_shown: f32,
     load_last: Option<std::time::Instant>,
@@ -672,7 +674,7 @@ impl Ui {
         self.chat.rect[2] += x;
     }
     pub fn new() -> Option<Ui> {
-        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, welcome_button_hovered: false, welcome_cancel_hovered: false, duty_button_hovered: false, inbox_button_hovered: false, timetable_button_hovered: false, sae_button_hovered: false, emergency_hovered: false, welcome_track: None, welcome_max: 0.0, welcome_view: 0.0, load_shown: 0.0, load_last: None })
+        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, welcome_button_hovered: false, welcome_cancel_hovered: false, duty_button_hovered: false, inbox_button_hovered: false, timetable_button_hovered: false, sae_button_hovered: false, emergency_hovered: false, welcome_track: None, welcome_max: 0.0, welcome_view: 0.0, welcome_tex: Default::default(), load_shown: 0.0, load_last: None })
     }
 
     /// Draw the frame's interface: its overlays go after the HUD's in `scene.overlays`.
@@ -1579,8 +1581,8 @@ impl Ui {
             right = button[0] - gap;
         }
         // the emergency call: a red button at the navigator's left edge
-        let mut x0 = nav[0];
         if let Some((state, can)) = f.radio.as_ref().and_then(|r| r.emergency) {
+            let x0 = nav[0];
             let button = [x0, top, x0 + bw, top + h];
             let on = over(button);
             let fill = if state == crate::phonie::Button::InCall || (on && can) { [236, 64, 56, 255] } else { [200, 40, 36, 245] };
@@ -1589,10 +1591,14 @@ impl Ui {
             let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
             scene.overlays.push((icon, [cx - iz * 0.5, cy - iz * 0.5, cx + iz * 0.5, cy + iz * 0.5]));
             self.emergency_hovered = on;
-            x0 = button[2] + gap;
         }
-        // the call: a band between the buttons
-        let band = [x0, top, right, top + h];
+        let _ = right;
+        // the call: a band of the navigator's width over the row of buttons (under it when the
+        // navigator stands at the top)
+        let vgap = 6.0 * s;
+        let band_top = if up { top - vgap - h } else { top + h + vgap };
+        let band = [nav[0], band_top, nav[2], band_top + h];
+        let calling = f.radio.as_ref().is_some_and(|r| r.call.is_some());
         if let Some((radio, call)) = f.radio.as_ref().and_then(|radio| radio.call.map(|c| (radio, c))).filter(|_| band[2] - band[0] > 80.0 * s) {
             let accent = match call {
                 CallKind::Individual => [90, 160, 255],
@@ -1629,11 +1635,12 @@ impl Ui {
                 self.text.rounded(r, scene, [dx - d, mid - d, dx + d, mid + d], d, [dot[0], dot[1], dot[2], a]);
             }
         }
-        // the notifications go on over the row
+        // the notifications go on over the row (and the call's band)
+        let (lo, hi) = if calling { (top.min(band_top), (top + h).max(band_top + h)) } else { (top, top + h) };
         Some(match f.notice_anchor {
-            Some(a) if up => [a[0], top, a[2], a[3]],
-            Some(a) => [a[0], a[1], a[2], top + h],
-            None => [nav[0], top, nav[2], top + h],
+            Some(a) if up => [a[0], lo, a[2], a[3]],
+            Some(a) => [a[0], a[1], a[2], hi],
+            None => [nav[0], lo, nav[2], hi],
         })
     }
 
@@ -1643,8 +1650,12 @@ impl Ui {
         self.welcome_button_hovered = false;
         self.welcome_cancel_hovered = false;
         self.welcome_track = None;
-        let Some((blocks, scroll, button, question)) = f.welcome else {
+        let Some((blocks, scroll, button, question, pictures)) = f.welcome else {
             self.welcome_max = 0.0;
+            // (the window closed: its pictures go)
+            for (_, tex) in self.welcome_tex.drain() {
+                r.free_texture(scene, tex);
+            }
             return;
         };
         use crate::welcome::{Deco, Tone};
@@ -1656,7 +1667,10 @@ impl Ui {
         let (lines, content_h) = {
             let tc = &self.text;
             let measure = |t: &str, bold: bool, px: f32| if bold { tc.width_in(&tc.bold, t, px) } else { tc.width_raw(t, px) };
-            crate::welcome::layout(blocks, text_w, body, &measure)
+            let size = |src: &str| pictures.iter().find(|p| p.src == src).map(|p| (p.width, p.height));
+            // (a picture no higher than the window's text can show)
+            let max_picture = ((f.height - 48.0 * s).max(160.0 * s) - pad * 2.0 - foot) * 0.92;
+            crate::welcome::layout(blocks, text_w, body, &measure, &size, max_picture)
         };
         let max_h = (f.height - 48.0 * s).max(160.0 * s);
         let h = (content_h + pad * 2.0 + foot).min(max_h).max(180.0 * s);
@@ -1679,6 +1693,18 @@ impl Ui {
         for l in &lines {
             let y = top + l.y - scroll;
             if y < top - 0.5 || y + l.h > bottom + 0.5 {
+                continue;
+            }
+            if let Some((src, x, w)) = l.image.as_ref() {
+                if let Some(p) = pictures.iter().find(|p| &p.src == src) {
+                    let key = (p.src.clone(), std::sync::Arc::as_ptr(&p.rgba) as usize);
+                    let tex = *self.welcome_tex.entry(key).or_insert_with(|| {
+                        let img = omsi_texture::Image { width: p.width, height: p.height, rgba: (*p.rgba).clone(), has_alpha: true };
+                        r.add_texture(scene, &img, false)
+                    });
+                    let x0 = (left + x).round();
+                    scene.overlays.push((tex, [x0, y.round(), x0 + w.round(), (y + l.h).round()]));
+                }
                 continue;
             }
             match l.deco {

@@ -2390,7 +2390,7 @@ impl ApplicationHandler for App {
                             // (the row of buttons only for a driver in the seat: none for one
                             // walking about or sitting in another player's bus)
                             radio: self.phonie.as_ref().and_then(|r| r.hud()).filter(|_| seated),
-                            welcome: self.welcome.as_ref().map(|w| (w.blocks.as_slice(), w.scroll, w.button, w.action.is_some())),
+                            welcome: self.welcome.as_ref().map(|w| (w.blocks.as_slice(), w.scroll, w.button, w.action.is_some(), w.pictures.as_slice())),
                             inbox_button: (seated && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)).then_some(self.inbox_unread),
                             timetable_button: (seated && self.duty.is_some()).then_some(self.timetable),
                             duty_button: (seated && self.self_duty == Some(true) && self.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)).then_some(self.duty.is_some()),

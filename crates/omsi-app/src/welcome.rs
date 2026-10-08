@@ -5,17 +5,47 @@
 //! has none shows nothing.
 //!
 //! The Markdown is what such a text needs: headings (`#` to `######`), paragraphs, lists
-//! (`-`, `*`, `+`, `1.`), quotes (`>`), rules (`---`), code blocks (```` ``` ````) and, in
-//! a line, `**bold**`, `*italic*`, `` `code` `` and `[links](…)` (their text). Nothing of
-//! it is read as HTML.
+//! (`-`, `*`, `+`, `1.`), quotes (`>`), rules (`---`), code blocks (```` ``` ````),
+//! pictures alone on their line (`![text](name.png)`) and, in a line, `**bold**`,
+//! `*italic*`, `` `code` `` and `[links](…)` (their text).
+//!
+//! A text that begins with a tag is HTML instead, read into the same blocks: `h1`-`h6`, `p`
+//! (and `div` …), `br`, `ul`/`ol`/`li`, `blockquote`, `pre`, `hr`, `img`, and `b`/`strong`,
+//! `i`/`em`, `code`, `a` in a line; scripts and styles are left out, other tags are read
+//! past. A picture is one of the server's (`GET /welcome/<name>`, PNG or JPEG): a picture
+//! from elsewhere on the web is not fetched (its text is shown) - the players' games ask
+//! the server they joined and nobody else.
 
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// The welcome fetched while joining, for the game to show once its world is there.
-static FETCHED: Mutex<Option<String>> = Mutex::new(None);
+/// A picture of the welcome: its name in the text and its pixels (RGBA).
+#[derive(Clone)]
+pub struct Picture {
+    pub src: String,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: std::sync::Arc<Vec<u8>>,
+}
 
-/// A joining game: the welcome of the server at the first of `bases` that has one.
+/// The pictures fetched at most, and the widest one kept (px; wider ones are scaled down).
+const MAX_PICTURES: usize = 12;
+const MAX_PICTURE_WIDTH: u32 = 1600;
+
+/// The welcome fetched while joining (and its pictures), for the game to show once its world
+/// is there.
+static FETCHED: Mutex<Option<(String, Vec<Picture>)>> = Mutex::new(None);
+
+/// The server's name of a picture's `src`: a plain file name (`images/` before it is
+/// allowed); none for a picture elsewhere.
+pub fn picture_name(src: &str) -> Option<&str> {
+    let s = src.trim().trim_start_matches("./");
+    let s = s.strip_prefix("images/").unwrap_or(s);
+    (!s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) && !s.starts_with('.')).then_some(s)
+}
+
+/// A joining game: the welcome of the server at the first of `bases` that has one, and the
+/// server's pictures it shows.
 pub fn fetch_any(bases: &[String]) {
     let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(5)).timeout(Duration::from_secs(10)).build();
     for b in bases {
@@ -28,8 +58,9 @@ pub fn fetch_any(bases: &[String]) {
                 }
                 let text = String::from_utf8_lossy(&body).replace("\r\n", "\n").trim().to_string();
                 if !text.is_empty() {
-                    log::info!("welcome: the server's welcome ({} bytes)", text.len());
-                    *FETCHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
+                    let pictures = fetch_pictures(&agent, b, &text);
+                    log::info!("welcome: the server's welcome ({} bytes, {} pictures)", text.len(), pictures.len());
+                    *FETCHED.lock().unwrap_or_else(|e| e.into_inner()) = Some((text, pictures));
                 }
                 return;
             }
@@ -40,8 +71,38 @@ pub fn fetch_any(bases: &[String]) {
     }
 }
 
+/// The server's pictures the welcome shows, decoded (and scaled down when very wide).
+fn fetch_pictures(agent: &ureq::Agent, base: &str, text: &str) -> Vec<Picture> {
+    let mut out: Vec<Picture> = Vec::new();
+    for b in parse(text).into_iter().filter(|b| b.kind == Kind::Image) {
+        let Some(name) = picture_name(&b.marker) else { continue };
+        if out.len() >= MAX_PICTURES || out.iter().any(|p| p.src == b.marker) {
+            continue;
+        }
+        let Ok(r) = agent.get(&format!("{base}/welcome/{name}")).call() else {
+            log::info!("welcome: picture {name} not served");
+            continue;
+        };
+        let mut body = Vec::new();
+        if std::io::Read::read_to_end(&mut std::io::Read::take(r.into_reader(), omsi_net::ws::MAX_WELCOME_IMAGE), &mut body).is_err() {
+            continue;
+        }
+        let img = match image::load_from_memory(&body) {
+            Ok(i) => i,
+            Err(e) => {
+                log::info!("welcome: picture {name}: {e}");
+                continue;
+            }
+        };
+        let img = if img.width() > MAX_PICTURE_WIDTH { img.resize(MAX_PICTURE_WIDTH, u32::MAX, image::imageops::FilterType::Triangle) } else { img };
+        let rgba = img.to_rgba8();
+        out.push(Picture { src: b.marker.clone(), width: rgba.width(), height: rgba.height(), rgba: std::sync::Arc::new(rgba.into_raw()) });
+    }
+    out
+}
+
 /// The welcome fetched, once.
-pub fn take() -> Option<String> {
+pub fn take() -> Option<(String, Vec<Picture>)> {
     FETCHED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
@@ -49,6 +110,7 @@ pub fn take() -> Option<String> {
 /// scrolled (px) and its button's label.
 pub struct Welcome {
     pub blocks: Vec<Block>,
+    pub pictures: Vec<Picture>,
     pub scroll: f32,
     pub button: &'static str,
     /// A question: what its button does (a Cancel button beside it closes the window).
@@ -64,7 +126,12 @@ pub enum Action {
 
 impl Welcome {
     pub fn new(text: &str) -> Welcome {
-        Welcome { blocks: parse(text), scroll: 0.0, button: "Play", action: None }
+        Welcome { blocks: parse(text), pictures: Vec::new(), scroll: 0.0, button: "Play", action: None }
+    }
+
+    /// The server's welcome with its pictures.
+    pub fn with_pictures(text: &str, pictures: Vec<Picture>) -> Welcome {
+        Welcome { pictures, ..Welcome::new(text) }
     }
 
     /// Leave the duty taken from the own menu (`line`, `tour`)? Its button leaves it.
@@ -76,12 +143,12 @@ impl Welcome {
             literal(tour),
             literal(&omsi_ui::tr("The duty is free again for the other players and the AI buses."))
         );
-        Welcome { blocks: parse(&md), scroll: 0.0, button: "Leave the duty", action: Some(Action::LeaveDuty) }
+        Welcome { blocks: parse(&md), pictures: Vec::new(), scroll: 0.0, button: "Leave the duty", action: Some(Action::LeaveDuty) }
     }
 
     /// The dispatcher's messages, newest first, in the welcome's window.
     pub fn inbox(list: &[InboxMessage]) -> Welcome {
-        Welcome { blocks: parse(&inbox_text(list)), scroll: 0.0, button: "Close", action: None }
+        Welcome { blocks: parse(&inbox_text(list)), pictures: Vec::new(), scroll: 0.0, button: "Close", action: None }
     }
 }
 
@@ -134,6 +201,8 @@ pub enum Kind {
     Quote,
     Code,
     Rule,
+    /// A picture: its `src` is the block's `marker`, its text the spans.
+    Image,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -164,8 +233,17 @@ impl Block {
     }
 }
 
-/// The blocks of a Markdown text.
+/// The blocks of a welcome: HTML when it begins with a tag, Markdown otherwise.
 pub fn parse(text: &str) -> Vec<Block> {
+    if text.trim_start().starts_with('<') {
+        parse_html(text)
+    } else {
+        parse_markdown(text)
+    }
+}
+
+/// The blocks of a Markdown text.
+pub fn parse_markdown(text: &str) -> Vec<Block> {
     let mut out: Vec<Block> = Vec::new();
     // the paragraph (or quote) being gathered from its lines
     let mut open: Option<(Kind, String, String)> = None;
@@ -195,6 +273,16 @@ pub fn parse(text: &str) -> Vec<Block> {
             continue;
         }
         let indent = line.len() - trimmed.len();
+        // a picture alone on its line
+        if let Some(rest) = trimmed.strip_prefix("![") {
+            if let Some((alt, tail)) = rest.split_once("](") {
+                if let Some(src) = tail.strip_suffix(')') {
+                    flush(&mut open, &mut out);
+                    out.push(Block { kind: Kind::Image, marker: src.trim().to_string(), spans: vec![Span { text: alt.to_string(), style: Style::default() }] });
+                    continue;
+                }
+            }
+        }
         // a heading
         let hashes = trimmed.chars().take_while(|c| *c == '#').count();
         if (1..=6).contains(&hashes) && trimmed[hashes..].starts_with(' ') {
@@ -251,6 +339,261 @@ pub fn parse(text: &str) -> Vec<Block> {
         }
     }
     flush(&mut open, &mut out);
+    out
+}
+
+/// `&amp;` and the others, and `&#233;` / `&#xE9;`.
+fn entities(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    let mut rest = t;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let end = tail[..tail.len().min(12)].find(';');
+        let decoded = end.and_then(|e| {
+            let name = &tail[1..e];
+            let c = match name {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" | "#39" => Some('\''),
+                "nbsp" => Some('\u{a0}'),
+                "eacute" => Some('é'),
+                "egrave" => Some('è'),
+                "agrave" => Some('à'),
+                "ccedil" => Some('ç'),
+                "euro" => Some('€'),
+                "laquo" => Some('«'),
+                "raquo" => Some('»'),
+                "hellip" => Some('…'),
+                "mdash" => Some('—'),
+                "ndash" => Some('–'),
+                "copy" => Some('©'),
+                "reg" => Some('®'),
+                "trade" => Some('™'),
+                "deg" => Some('°'),
+                "middot" => Some('·'),
+                "bull" => Some('•'),
+                "rsquo" => Some('’'),
+                "lsquo" => Some('‘'),
+                "ldquo" => Some('“'),
+                "rdquo" => Some('”'),
+                "ecirc" => Some('ê'),
+                "ocirc" => Some('ô'),
+                "acirc" => Some('â'),
+                "icirc" => Some('î'),
+                "ucirc" => Some('û'),
+                "ugrave" => Some('ù'),
+                "Eacute" => Some('É'),
+                _ => name
+                    .strip_prefix("#x")
+                    .or_else(|| name.strip_prefix("#X"))
+                    .and_then(|h| u32::from_str_radix(h, 16).ok())
+                    .or_else(|| name.strip_prefix('#').and_then(|d| d.parse().ok()))
+                    .and_then(char::from_u32),
+            };
+            c.map(|c| (c, e + 1))
+        });
+        match decoded {
+            Some((c, n)) => {
+                out.push(c);
+                rest = &tail[n..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// An HTML tag's attribute (`src="…"`, `alt='…'`, `width=200`).
+fn attr(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(name) {
+        let at = from + i;
+        let before = lower[..at].chars().last();
+        let after = lower[at + name.len()..].trim_start();
+        if before.is_some_and(|c| c.is_whitespace()) && after.starts_with('=') {
+            let v = tag[tag.len() - after.len() + 1..].trim_start();
+            let value = match v.chars().next() {
+                Some(q @ ('"' | '\'')) => v[1..].split(q).next().unwrap_or(""),
+                _ => v.split(|c: char| c.is_whitespace() || c == '>' || c == '/').next().unwrap_or(""),
+            };
+            return Some(entities(value));
+        }
+        from = at + name.len();
+    }
+    None
+}
+
+/// The blocks of an HTML text (see the module's doc for what is read).
+pub fn parse_html(html: &str) -> Vec<Block> {
+    struct List {
+        ordered: bool,
+        n: u32,
+    }
+    let mut out: Vec<Block> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
+    let mut kind = Kind::Para;
+    let mut marker = String::new();
+    let (mut bold, mut italic, mut code, mut link) = (0u32, 0u32, 0u32, 0u32);
+    let mut lists: Vec<List> = Vec::new();
+    let mut quote = 0u32;
+    let mut pre = false;
+    let mut pre_text = String::new();
+    let base = |quote: u32| if quote > 0 { Kind::Quote } else { Kind::Para };
+    // the text gathered as one block
+    fn flush(out: &mut Vec<Block>, spans: &mut Vec<Span>, kind: Kind, marker: &mut String) {
+        // (the blanks at the block's ends go)
+        if let Some(f) = spans.first_mut() {
+            f.text = f.text.trim_start().to_string();
+        }
+        if let Some(l) = spans.last_mut() {
+            l.text = l.text.trim_end().to_string();
+        }
+        spans.retain(|s| !s.text.is_empty());
+        if !spans.is_empty() {
+            out.push(Block { kind, marker: std::mem::take(marker), spans: std::mem::take(spans) });
+        }
+        spans.clear();
+    }
+    let mut rest = html;
+    while !rest.is_empty() {
+        // a comment
+        if let Some(r) = rest.strip_prefix("<!--") {
+            rest = r.find("-->").map(|i| &r[i + 3..]).unwrap_or("");
+            continue;
+        }
+        if rest.starts_with('<') {
+            let Some(end) = rest.find('>') else { break };
+            let tag = &rest[1..end];
+            rest = &rest[end + 1..];
+            let closing = tag.starts_with('/');
+            let name: String = tag.trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+            match name.as_str() {
+                "script" | "style" | "head" | "title" if !closing => {
+                    let close = format!("</{name}");
+                    rest = rest.to_ascii_lowercase().find(&close).map(|i| &rest[i..]).unwrap_or("");
+                    if let Some(e) = rest.find('>') {
+                        rest = &rest[e + 1..];
+                    }
+                }
+                "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    kind = if closing { base(quote) } else { Kind::Heading(name[1..].parse().unwrap_or(1)) };
+                }
+                "p" | "div" | "section" | "article" | "header" | "footer" | "center" | "main" | "table" | "tr" => {
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    if !matches!(kind, Kind::Item(_)) || closing {
+                        kind = base(quote);
+                    }
+                }
+                "br" => {
+                    let k = kind;
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    kind = if matches!(k, Kind::Item(_)) { Kind::Para } else { k };
+                }
+                "ul" | "ol" => {
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    if closing {
+                        lists.pop();
+                    } else {
+                        lists.push(List { ordered: name == "ol", n: 0 });
+                    }
+                    kind = base(quote);
+                }
+                "li" => {
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    if closing {
+                        kind = base(quote);
+                    } else {
+                        let depth = lists.len().saturating_sub(1).min(4) as u8;
+                        marker = match lists.last_mut() {
+                            Some(l) if l.ordered => {
+                                l.n += 1;
+                                format!("{}.", l.n)
+                            }
+                            _ => "•".into(),
+                        };
+                        kind = Kind::Item(depth);
+                    }
+                }
+                "blockquote" => {
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    quote = if closing { quote.saturating_sub(1) } else { quote + 1 };
+                    kind = base(quote);
+                }
+                "hr" => {
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    out.push(Block { kind: Kind::Rule, marker: String::new(), spans: Vec::new() });
+                }
+                "pre" => {
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    if closing {
+                        for line in entities(pre_text.trim_matches('\n')).lines() {
+                            out.push(Block { kind: Kind::Code, marker: String::new(), spans: vec![Span { text: line.replace('\t', "    "), style: Style { code: true, ..Default::default() } }] });
+                        }
+                        pre_text.clear();
+                    }
+                    pre = !closing;
+                }
+                "img" => {
+                    flush(&mut out, &mut spans, kind, &mut marker);
+                    let src = attr(tag, "src").unwrap_or_default();
+                    if !src.is_empty() {
+                        let alt = attr(tag, "alt").unwrap_or_default();
+                        out.push(Block { kind: Kind::Image, marker: src, spans: vec![Span { text: alt, style: Style::default() }] });
+                    }
+                }
+                "b" | "strong" => bold = if closing { bold.saturating_sub(1) } else { bold + 1 },
+                "i" | "em" => italic = if closing { italic.saturating_sub(1) } else { italic + 1 },
+                "code" | "tt" | "kbd" => code = if closing { code.saturating_sub(1) } else { code + 1 },
+                "a" => link = if closing { link.saturating_sub(1) } else { link + 1 },
+                _ => {}
+            }
+            continue;
+        }
+        let end = rest.find('<').unwrap_or(rest.len());
+        let raw = &rest[..end];
+        rest = &rest[end..];
+        if pre {
+            pre_text.push_str(raw);
+            continue;
+        }
+        // (blanks and line ends in the text are one blank, as a browser shows them)
+        let mut text = String::with_capacity(raw.len());
+        let mut blank = false;
+        for c in entities(raw).chars() {
+            if c.is_whitespace() && c != '\u{a0}' {
+                if !blank {
+                    text.push(' ');
+                }
+                blank = true;
+            } else {
+                text.push(if c == '\u{a0}' { ' ' } else { c });
+                blank = false;
+            }
+        }
+        if text.trim().is_empty() && spans.is_empty() {
+            continue;
+        }
+        let style = Style { bold: bold > 0, italic: italic > 0, code: code > 0, link: link > 0 };
+        match spans.last_mut() {
+            Some(l) if l.style == style => {
+                if l.text.ends_with(' ') && text.starts_with(' ') {
+                    text.remove(0);
+                }
+                l.text.push_str(&text);
+            }
+            _ => spans.push(Span { text, style }),
+        }
+    }
+    flush(&mut out, &mut spans, kind, &mut marker);
     out
 }
 
@@ -367,12 +710,17 @@ pub struct Line {
     pub h: f32,
     pub runs: Vec<Run>,
     pub deco: Deco,
+    /// A picture on the line: its `src`, where it begins and how wide it is drawn (its
+    /// height is the line's).
+    pub image: Option<(String, f32, f32)>,
 }
 
 /// The lines of `blocks` laid out `width` wide with a body text of `px` pixels;
-/// `measure(text, bold, px)` is how wide a text is drawn. Returns the lines and the whole
-/// height.
-pub fn layout(blocks: &[Block], width: f32, px: f32, measure: &dyn Fn(&str, bool, f32) -> f32) -> (Vec<Line>, f32) {
+/// `measure(text, bold, px)` is how wide a text is drawn, `picture(src)` how large a picture
+/// is (none: not there - its text is shown); a picture is drawn at its size scaled as the
+/// text (`px / 16`), no wider than the text and no higher than `max_picture`, in the middle.
+/// Returns the lines and the whole height.
+pub fn layout(blocks: &[Block], width: f32, px: f32, measure: &dyn Fn(&str, bool, f32) -> f32, picture: &dyn Fn(&str) -> Option<(u32, u32)>, max_picture: f32) -> (Vec<Line>, f32) {
     let mut lines: Vec<Line> = Vec::new();
     let mut y = 0.0f32;
     let gap = px * 0.7;
@@ -402,8 +750,32 @@ pub fn layout(blocks: &[Block], width: f32, px: f32, measure: &dyn Fn(&str, bool
         }
         prev = Some(b.kind);
         if b.kind == Kind::Rule {
-            lines.push(Line { y, h: px, runs: Vec::new(), deco: Deco::Rule });
+            lines.push(Line { y, h: px, runs: Vec::new(), deco: Deco::Rule, image: None });
             y += px;
+            continue;
+        }
+        if b.kind == Kind::Image {
+            match picture(&b.marker).filter(|(w, h)| *w > 0 && *h > 0) {
+                Some((iw, ih)) => {
+                    let mut w = (iw as f32 * px / 16.0).min(width);
+                    let mut h = w * ih as f32 / iw as f32;
+                    if h > max_picture {
+                        h = max_picture;
+                        w = h * iw as f32 / ih as f32;
+                    }
+                    lines.push(Line { y, h: h.round(), runs: Vec::new(), deco: Deco::None, image: Some((b.marker.clone(), ((width - w) * 0.5).max(0.0), w)) });
+                    y += h.round();
+                }
+                None => {
+                    // (a picture not there: its text, if it has one)
+                    let alt = b.text();
+                    if !alt.trim().is_empty() {
+                        let lh = (px * 1.42).ceil();
+                        lines.push(Line { y, h: lh, runs: vec![Run { x: 0.0, text: format!("[{}]", alt.trim()), px, bold: false, tone: Tone::Muted, plate: false }], deco: Deco::None, image: None });
+                        y += lh;
+                    }
+                }
+            }
             continue;
         }
         let (indent, deco) = match b.kind {
@@ -470,7 +842,7 @@ pub fn layout(blocks: &[Block], width: f32, px: f32, measure: &dyn Fn(&str, bool
             rows[0].insert(0, m);
         }
         for runs in rows {
-            lines.push(Line { y, h: lh, runs, deco });
+            lines.push(Line { y, h: lh, runs, deco, image: None });
             y += lh;
         }
     }
@@ -564,7 +936,7 @@ mod tests {
     fn lines_wrap_within_the_width() {
         let m = |t: &str, _: bool, px: f32| t.chars().count() as f32 * px * 0.5;
         let b = parse("un deux trois quatre cinq six sept huit neuf dix\n\nmotextrêmementlongquinetientpassurunelignemotextrêmementlong");
-        let (lines, h) = layout(&b, 100.0, 10.0, &m);
+        let (lines, h) = layout(&b, 100.0, 10.0, &m, &|_| None, 500.0);
         assert!(lines.len() >= 4, "{lines:?}");
         for l in &lines {
             for r in &l.runs {
@@ -597,9 +969,62 @@ mod tests {
     }
 
     #[test]
+    fn a_welcome_in_html() {
+        let b = parse("<h1>Bienvenue &amp; bonne route</h1>
+<p>Un <b>serveur</b> <i>français</i>,
+  sur deux   lignes.<br>Puis une autre.</p><img src=\"images/plan.png\" alt='Le plan'>
+<ul><li>un</li><li>deux <a href=x>lien</a></li></ul><ol><li>premier</li></ol><blockquote>cite</blockquote><hr><pre>a  b
+ c</pre><script>alert(1)</script><!-- note --><p>&#233;t&eacute; &copy;</p>");
+        let texts: Vec<(Kind, String)> = b.iter().map(|b| (b.kind, plain(&b.spans))).collect();
+        assert_eq!(texts[0], (Kind::Heading(1), "Bienvenue & bonne route".into()));
+        assert_eq!(texts[1], (Kind::Para, "Un serveur français, sur deux lignes.".into()));
+        assert!(b[1].spans.iter().any(|s| s.text == "serveur" && s.style.bold));
+        assert!(b[1].spans.iter().any(|s| s.text == "français" && s.style.italic));
+        assert_eq!(texts[2], (Kind::Para, "Puis une autre.".into()));
+        assert_eq!((b[3].kind, b[3].marker.as_str(), texts[3].1.as_str()), (Kind::Image, "images/plan.png", "Le plan"));
+        assert_eq!((b[4].kind, b[4].marker.as_str()), (Kind::Item(0), "•"));
+        assert!(b[5].spans.iter().any(|s| s.text == "lien" && s.style.link));
+        assert_eq!((b[6].kind, b[6].marker.as_str()), (Kind::Item(0), "1."));
+        assert_eq!(texts[7], (Kind::Quote, "cite".into()));
+        assert_eq!(b[8].kind, Kind::Rule);
+        assert_eq!(texts[9], (Kind::Code, "a  b".into()));
+        assert_eq!(texts[10], (Kind::Code, " c".into()));
+        assert_eq!(texts[11], (Kind::Para, "été ©".into()));
+        assert_eq!(b.len(), 12, "{texts:?}");
+        // a Markdown picture alone on its line
+        let m = parse("Texte
+
+![Plan du réseau](plan.png)");
+        assert_eq!((m[1].kind, m[1].marker.as_str()), (Kind::Image, "plan.png"));
+    }
+
+    #[test]
+    fn pictures_are_the_servers_and_fit_the_window() {
+        assert_eq!(picture_name("images/plan.png"), Some("plan.png"));
+        assert_eq!(picture_name("./logo_2.jpg"), Some("logo_2.jpg"));
+        assert_eq!(picture_name("https://example.org/x.png"), None);
+        assert_eq!(picture_name("../x.png"), None);
+        let m = |t: &str, _: bool, px: f32| t.chars().count() as f32 * px * 0.5;
+        let b = parse("![a](wide.png)
+
+![b](tall.png)
+
+![Absente](none.png)");
+        let size = |s: &str| match s { "wide.png" => Some((2000, 500)), "tall.png" => Some((100, 3000)), _ => None };
+        let (lines, _) = layout(&b, 400.0, 16.0, &m, &size, 300.0);
+        let wide = lines[0].image.clone().unwrap();
+        assert_eq!((wide.2, lines[0].h), (400.0, 100.0));
+        let tall = lines[1].image.clone().unwrap();
+        assert_eq!(lines[1].h, 300.0);
+        assert!((tall.2 - 10.0).abs() < 0.01 && (tall.1 - 195.0).abs() < 0.01);
+        // a picture not there: its text
+        assert_eq!(lines[2].runs[0].text, "[Absente]");
+    }
+
+    #[test]
     fn a_list_item_has_its_marker_left_of_its_text() {
         let m = |t: &str, _: bool, px: f32| t.chars().count() as f32 * px * 0.5;
-        let (lines, _) = layout(&parse("- point"), 300.0, 10.0, &m);
+        let (lines, _) = layout(&parse("- point"), 300.0, 10.0, &m, &|_| None, 500.0);
         assert_eq!(lines[0].runs[0].text, "•");
         assert!(lines[0].runs[0].x < lines[0].runs[1].x);
     }

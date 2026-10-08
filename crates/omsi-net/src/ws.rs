@@ -70,6 +70,29 @@ pub struct ServerInfo {
 /// The longest welcome served (bytes).
 pub const MAX_WELCOME: u64 = 64 * 1024;
 
+/// The largest picture of the welcome served (bytes).
+pub const MAX_WELCOME_IMAGE: u64 = 4 << 20;
+
+/// `GET /welcome/<name>`: a picture of the welcome, from the folder `images` beside its
+/// file - a plain name (letters, digits, `.`, `_`, `-`) of a PNG or a JPEG; its
+/// bytes and type.
+pub fn welcome_image(file: Option<&std::path::Path>, name: &str) -> Option<(&'static str, Vec<u8>)> {
+    if name.is_empty() || name.len() > 100 || name.starts_with('.') || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+        return None;
+    }
+    let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+    let ctype = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => return None,
+    };
+    let path = file?.parent()?.join("images").join(name);
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut body = Vec::new();
+    Read::read_to_end(&mut Read::take(&mut f, MAX_WELCOME_IMAGE + 1), &mut body).ok()?;
+    (body.len() as u64 <= MAX_WELCOME_IMAGE).then_some((ctype, body))
+}
+
 /// `GET /welcome`: the server's welcome text, if it has one.
 pub fn welcome_text(file: Option<&std::path::Path>) -> Option<String> {
     let mut f = std::fs::File::open(file?).ok()?;
@@ -584,6 +607,13 @@ fn serve(stream: TcpStream, target: SocketAddr, info: &Mutex<ServerInfo>, stop: 
                 match welcome_text(file.as_deref()) {
                     Some(t) => ("200 OK", "text/markdown; charset=utf-8", t.into_bytes()),
                     None => ("404 Not Found", "text/plain", b"no welcome".to_vec()),
+                }
+            }
+            p if p.starts_with("/welcome/") => {
+                let file = info.lock().unwrap_or_else(|e| e.into_inner()).welcome_file.clone();
+                match welcome_image(file.as_deref(), &p["/welcome/".len()..]) {
+                    Some((ctype, b)) => ("200 OK", ctype, b),
+                    None => ("404 Not Found", "text/plain", b"no such picture".to_vec()),
                 }
             }
             "/icon.png" => {
@@ -1135,6 +1165,16 @@ mod tests {
         assert_eq!(welcome_text(Some(&f)).as_deref(), Some("# Bonjour\n\nBon **service** !"));
         std::fs::write(&f, "  \n").unwrap();
         assert_eq!(welcome_text(Some(&f)), None);
+        // its pictures, from `images` beside it, by a plain name only
+        let dir = f.parent().unwrap().join("images");
+        std::fs::create_dir_all(&dir).unwrap();
+        let name = format!("omsi-welcome-{}.png", std::process::id());
+        std::fs::write(dir.join(&name), b"\x89PNG....").unwrap();
+        assert_eq!(welcome_image(Some(&f), &name).map(|x| x.0), Some("image/png"));
+        assert!(welcome_image(Some(&f), "../secret.png").is_none());
+        assert!(welcome_image(Some(&f), &name.replace(".png", ".txt")).is_none());
+        assert!(welcome_image(None, &name).is_none());
+        let _ = std::fs::remove_file(dir.join(&name));
         let _ = std::fs::remove_file(&f);
     }
 
