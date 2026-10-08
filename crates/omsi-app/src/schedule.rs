@@ -4937,6 +4937,13 @@ impl PlayerDuty {
     pub fn delay(&self, now: f64) -> f64 {
         let now = self.duty_time(now);
         let trip = self.trip();
+        // a dispatcher's deadhead run: late only once it cannot take up its trip in time (it
+        // is not early: it waits at the stop it takes up from)
+        if trip.regul.deadhead {
+            if let Some(next) = self.trips.get(self.trip_index + 1) {
+                return (now - next.departure).max(0.0);
+            }
+        }
         if self.done {
             if let Some(next) = self.trips.get(self.trip_index + 1) {
                 return now - next.departure;
@@ -6296,6 +6303,9 @@ pub(crate) mod tests {
         assert!(ibis.regul.deadhead, "the IBIS shows the deadhead run");
         let p = d.progress(1000.0);
         assert!(p.deadhead && p.trip == again.name);
+        // (not early on the way: late only once the trip cannot leave in time)
+        assert_eq!(d.delay(1000.0), 0.0);
+        assert_eq!(d.delay(1290.0), 90.0);
 
         // two minutes later from C on
         let mut d = duty_of(vec![out.clone(), back.clone()]);

@@ -3332,6 +3332,31 @@ fn timetable_rows(duty: Option<&crate::schedule::PlayerDuty>, delay: Option<f64>
     let trip = d.trips.get(d.trip_index)?;
     let hm = |t: f64| format!("{:02}:{:02}", ((t / 3600.0) as i64).rem_euclid(24), ((t % 3600.0) / 60.0) as i64);
     let delay = delay.unwrap_or(0.0);
+    // a dispatcher's deadhead run: out of service to where the next trip is taken up - the
+    // window shows that trip, its first stop the one driven to
+    if trip.regul.deadhead {
+        if let Some(next) = d.trips.get(d.trip_index + 1) {
+            let line = if next.line.trim().is_empty() { d.line.trim() } else { next.line.trim() };
+            let title = format!(
+                "{} · {} › {}   {}{}:{:02}",
+                omsi_ui::tr("Deadhead run"),
+                line,
+                next.terminus.trim(),
+                if delay < 0.0 { "−" } else { "+" },
+                (delay.abs() / 60.0) as i64,
+                (delay.abs() % 60.0) as i64
+            );
+            let last = next.stops.iter().rposition(|s| s.stops);
+            let rows = next
+                .stops
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.stops)
+                .map(|(k, s)| (s.name.trim().to_string(), if Some(k) == last { hm(s.arr) } else { hm(s.dep) }, if k == 0 { 1 } else { 2 }))
+                .collect();
+            return Some((title, rows));
+        }
+    }
     let title = format!(
         "{} › {}   {}{}:{:02}   ({}/{})",
         if trip.line.trim().is_empty() { d.line.trim() } else { trip.line.trim() },

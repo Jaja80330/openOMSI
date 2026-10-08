@@ -26699,3 +26699,12 @@ _version: 2
   nl: "Vervroegd vertrek om"
   pl: "Wcześniejszy odjazd o"
   cs: "Předčasný odjezd v"
+"Deadhead run":
+  de: "Leerfahrt"
+  fr: "Haut-le-pied"
+  es: "En vacío"
+  it: "Fuori servizio"
+  pt: "Em vazio"
+  nl: "Lege rit"
+  pl: "Pusty kurs"
+  cs: "Prázdná jízda"
