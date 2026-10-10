@@ -214,6 +214,9 @@ pub(crate) struct Player {
     /// A destination picked by hand for the bus's roller blind, kept until the electrics are
     /// on and the auto-start is done (`schedule::turn_roller_blind`).
     pub(crate) blind_pick: Option<schedule::BlindPick>,
+    /// The code of the destination typed by hand (see `game_lists::set_destination_text`),
+    /// put in this bus's copy of its depot file.
+    pub(crate) typed_destination: Option<i32>,
     /// The IBIS being typed, with the line and terminus it is typed for.
     pub(crate) ibis_typist: Option<(omsi_sim::ibis::Typist, String, String, Vec<String>)>,
     /// The duty is typed into the IBIS by itself (after Shift+U or `--autostart`): a new

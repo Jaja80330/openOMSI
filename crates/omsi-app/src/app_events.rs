@@ -160,7 +160,7 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed
                     && self.menus.menu_edit.is_some()
                     && !self.menus.menu_edit_icao
-                    && (self.menus.menu_edit_search || matches!(self.menus.list_kind, Some(crate::game_lists::ListKind::RouteNumbers)))
+                    && (self.menus.menu_edit_search || self.free_text_list())
                 {
                     if let Some(text) = event.text.as_deref() {
                         if text.chars().any(|c| !c.is_control()) {

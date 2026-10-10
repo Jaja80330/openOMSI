@@ -563,6 +563,7 @@ pub(crate) fn spawn_player_prepared(
         driver: None,
         ibis_duty: None,
         blind_pick: None,
+        typed_destination: None,
         ibis_typist: None,
         duty_typed: false,
         html_next_stop: None,

@@ -40,6 +40,8 @@ pub(crate) enum ListKind {
     /// The route numbers (lines) for the destination display: the depot file's and the
     /// map timetable's.
     RouteNumbers,
+    /// A destination text typed by hand for the destination display (a matrix's).
+    DestinationText,
     /// The depot files (.hof) of the bus driven.
     Hofs,
     /// The map's entry points (the launcher's "Start at"), to put the bus at.
@@ -146,6 +148,52 @@ fn numeric_ibis_line(line: &str) -> bool {
 /// The route number on the bus's IBIS and display, as picked or typed in the destination
 /// list (the destination stays: the one on the display now, else the first -
 /// `schedule::shown_destination`).
+/// Whether a depot file's destinations carry texts (a matrix shows them): a roller blind's
+/// termini name only its pictures, and no typed text can show there.
+pub(crate) fn shows_text(hof: &omsi_vehicle::Hof) -> bool {
+    hof.termini.iter().any(|t| t.strings.iter().any(|s| !s.trim().is_empty() && !omsi_vehicle::hof::is_destination_image_path(s)))
+}
+
+/// A destination text typed by hand, as the driver of a matrix types one on the spot (a
+/// special run, a deadhead run, a breakdown): a destination of its own, put in the bus's
+/// copy of its depot file and shown as a picked one is. It takes the lines of the
+/// destination shown now - the text where that has one, nothing where it has none (a second
+/// line, a side sign left empty) - so that it stands on the display as the depot file's own
+/// do. Typed again, it replaces the one before.
+pub(crate) fn set_destination_text(app: &mut App, text: &str) {
+    let text = text.trim();
+    let Some(p) = app.player.as_mut() else { return };
+    let Some(hof) = p.vehicle.host.hof.clone() else { return };
+    if text.is_empty() || !shows_text(&hof) {
+        return;
+    }
+    let mut hof = (*hof).clone();
+    // the one typed before goes
+    if let Some(code) = p.typed_destination.take() {
+        hof.termini.retain(|t| t.code != code);
+    }
+    let shown = crate::schedule::shown_destination(&p.vehicle, &hof, p.blind_pick.as_ref()).and_then(|i| hof.termini.get(i)).cloned();
+    let slots = hof.string_count_terminus.max(shown.as_ref().map_or(0, |t| t.strings.len())).max(1);
+    let strings = (0..slots)
+        .map(|k| match &shown {
+            Some(t) if !t.strings.get(k).is_some_and(|s| !s.trim().is_empty()) => String::new(),
+            _ => text.to_string(),
+        })
+        .collect();
+    // a code no destination of the file has, from the top of the IBIS's three digits down
+    let code = (1..=999).rev().find(|c| !hof.termini.iter().any(|t| t.code == *c)).unwrap_or(999);
+    hof.termini.push(omsi_vehicle::hof::Terminus { code, texture_id: String::new(), terminus_stop: None, all_exit: false, strings });
+    let ti = hof.termini.len() - 1;
+    let hof = std::sync::Arc::new(hof);
+    p.vehicle.host.hof = Some(hof.clone());
+    p.typed_destination = Some(code);
+    // (the line on the IBIS stays; only the destination changes)
+    let line = destination_line(&p.vehicle);
+    p.set_destination_by_hand(&hof, &line, ti);
+    log::info!("destination text typed by hand: '{text}' (code {code})");
+    app.service_msg = Some((format!("{}: {text}", omsi_ui::tr("Destination")), 3.0));
+}
+
 pub(crate) fn set_route_by_hand(app: &mut App, line: &str) {
     let line = line.trim();
     if line.is_empty() {
@@ -520,6 +568,10 @@ pub(crate) fn items(app: &App, kind: &ListKind) -> Vec<(String, String)> {
                 let now = line_shown(&p.vehicle).unwrap_or_else(|| "-".into());
                 out.push((format!("{}: {now}...", tr("Route number")), "routes".into()));
             }
+            // (a matrix shows any text; a roller blind only its own pictures)
+            if app.player.as_ref().and_then(|p| p.vehicle.host.hof.as_deref()).is_some_and(shows_text) {
+                out.push((format!("{}...", tr("Type a destination text")), "text".into()));
+            }
             if let Some(hof) = app.player.as_ref().and_then(|p| p.vehicle.host.hof.clone()) {
                 let mut termini: Vec<(String, i32, usize)> = hof
                     .termini
@@ -537,6 +589,10 @@ pub(crate) fn items(app: &App, kind: &ListKind) -> Vec<(String, String)> {
                 out.push((tr("This bus has no depot file (.hof) with destinations"), "back".into()));
             }
         }
+        ListKind::DestinationText => match app.menus.menu_edit.as_ref() {
+            Some(t) => out.push((format!("{}: {t}_  ({})", tr("Destination"), tr("Enter sets it, Esc cancels")), "text_type".into())),
+            None => out.push((format!("{}...", tr("Type a destination text")), "text_type".into())),
+        },
         ListKind::RouteNumbers => {
             // any route number, typed as on OMSI's own field (#836): the scripts that read
             // it (a bus that switches its functions by route number) take what is typed
@@ -780,6 +836,7 @@ pub(crate) fn menu_extras(
         ListKind::Numbers => (MenuKind::List, head("Fleet number..."), None),
         ListKind::Destinations => (MenuKind::List, head("Destination display..."), None),
         ListKind::RouteNumbers => (MenuKind::List, Some((tr("Route number"), String::new())), None),
+        ListKind::DestinationText => (MenuKind::List, Some((tr("Destination"), String::new())), None),
         ListKind::Hofs => (MenuKind::List, head("Depot file (HOF)..."), None),
         ListKind::Spots => (MenuKind::List, head("Teleport to a start point..."), None),
         ListKind::Sae => (MenuKind::List, Some((tr("SAE menu"), String::new())), None),
@@ -1042,6 +1099,24 @@ pub(crate) fn run_move(app: &mut App, kind: &ListKind, action: &str, mv: Move) -
             None
         }
         ListKind::Destinations if verb == "routes" => Some(ListKind::RouteNumbers),
+        ListKind::Destinations if verb == "text" => {
+            // (typing starts at once: the list is only its line)
+            app.menus.menu_edit = Some(String::new());
+            Some(ListKind::DestinationText)
+        }
+        ListKind::DestinationText => {
+            // the first press starts typing, the next one (Enter) sets what is typed
+            match app.menus.menu_edit.take() {
+                Some(t) => {
+                    set_destination_text(app, &t);
+                    None
+                }
+                None => {
+                    app.menus.menu_edit = Some(String::new());
+                    Some(ListKind::DestinationText)
+                }
+            }
+        }
         ListKind::RouteNumbers if verb == "route_type" => {
             // the first press starts typing, the next one (Enter) sets what is typed
             match app.menus.menu_edit.take() {

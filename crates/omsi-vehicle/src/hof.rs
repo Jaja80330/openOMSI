@@ -34,7 +34,7 @@ impl Terminus {
     }
 }
 
-fn is_destination_image_path(s: &str) -> bool {
+pub fn is_destination_image_path(s: &str) -> bool {
     let s = s.trim().to_ascii_lowercase();
     s.ends_with(".bmp") || s.ends_with(".tga") || s.ends_with(".png")
 }

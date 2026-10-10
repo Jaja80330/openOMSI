@@ -171,14 +171,19 @@ impl App {
             }
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 if let Some(t) = self.menus.menu_edit.take() {
-                    crate::game_lists::set_route_by_hand(self, &t);
+                    if matches!(self.menus.list_kind, Some(crate::game_lists::ListKind::DestinationText)) {
+                        crate::game_lists::set_destination_text(self, &t);
+                    } else {
+                        crate::game_lists::set_route_by_hand(self, &t);
+                    }
                     self.close_game_menu();
                 }
                 return;
             }
             _ => {
+                let max = self.free_text_max();
                 if let (Some(c), Some(t)) = (route_char(code), self.menus.menu_edit.as_mut()) {
-                    if t.chars().count() < ROUTE_NUMBER_MAX {
+                    if t.chars().count() < max {
                         t.push(c);
                     }
                 }
@@ -203,18 +208,29 @@ impl App {
             self.menus.chooser = Some(0);
             return;
         }
-        if !matches!(self.menus.list_kind, Some(crate::game_lists::ListKind::RouteNumbers)) || self.menus.menu_edit.is_none() {
+        if !self.free_text_list() || self.menus.menu_edit.is_none() {
             return;
         }
+        let max = self.free_text_max();
         if let Some(t) = self.menus.menu_edit.as_mut() {
             for c in text.chars().filter(|c| !c.is_control()) {
-                if t.chars().count() >= ROUTE_NUMBER_MAX {
+                if t.chars().count() >= max {
                     break;
                 }
                 t.push(c);
             }
         }
         self.refresh_list();
+    }
+
+    /// The open list is one whose line takes free text (a route number, a destination text).
+    pub(crate) fn free_text_list(&self) -> bool {
+        matches!(self.menus.list_kind, Some(crate::game_lists::ListKind::RouteNumbers | crate::game_lists::ListKind::DestinationText))
+    }
+
+    /// How long the free text of the open list may be.
+    fn free_text_max(&self) -> usize {
+        if matches!(self.menus.list_kind, Some(crate::game_lists::ListKind::DestinationText)) { DESTINATION_TEXT_MAX } else { ROUTE_NUMBER_MAX }
     }
 
     /// Set the clock to the time typed (digits: hh, hhmm or hhmmss; what is missing is 0).
@@ -369,7 +385,7 @@ impl App {
                 self.search_edit_key(code);
             } else if self.menus.menu_edit_icao {
                 self.icao_edit_key(code);
-            } else if matches!(self.menus.list_kind, Some(crate::game_lists::ListKind::RouteNumbers)) {
+            } else if self.free_text_list() {
                 self.route_edit_key(code);
             } else {
                 self.time_edit_key(code);
@@ -553,7 +569,7 @@ impl App {
                         self.menus.chooser = Some(k.min(self.menus.admin_list.as_ref().map(|l| l.len().saturating_sub(1)).unwrap_or(0)));
                     }
                 }
-                None if action != "back" && matches!(kind, crate::game_lists::ListKind::Tours(..) | crate::game_lists::ListKind::Numbers | crate::game_lists::ListKind::Destinations | crate::game_lists::ListKind::RouteNumbers | crate::game_lists::ListKind::Hofs | crate::game_lists::ListKind::Spots | crate::game_lists::ListKind::Sae | crate::game_lists::ListKind::SaeStops | crate::game_lists::ListKind::SaeTermini) => self.close_game_menu(),
+                None if action != "back" && matches!(kind, crate::game_lists::ListKind::Tours(..) | crate::game_lists::ListKind::Numbers | crate::game_lists::ListKind::Destinations | crate::game_lists::ListKind::RouteNumbers | crate::game_lists::ListKind::DestinationText | crate::game_lists::ListKind::Hofs | crate::game_lists::ListKind::Spots | crate::game_lists::ListKind::Sae | crate::game_lists::ListKind::SaeStops | crate::game_lists::ListKind::SaeTermini) => self.close_game_menu(),
                 None => self.menus.menu_top = None,
             }
             return;
@@ -612,6 +628,8 @@ mod route_tests {
 /// How long a route number typed by hand may be. Eight characters were too few: Hong Kong
 /// buses take commands through it (`paper_sign_1_name=ABC.png`, `adddept_sign=1`, #1518).
 const ROUTE_NUMBER_MAX: usize = 64;
+/// The longest destination text typed by hand (a matrix holds far less on one line).
+const DESTINATION_TEXT_MAX: usize = 48;
 
 /// How long the search of a list may be.
 const SEARCH_MAX: usize = 80;
