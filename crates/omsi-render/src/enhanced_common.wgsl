@@ -44,6 +44,10 @@ struct Enhanced {
     // rgb the moonlight on a surface facing the moon (after the clouds), w 1 while the
     // shadow maps are the moon's
     moon_light: vec4<f32>,
+    // the condensation on the player's bus's panes (optical depths): windscreen, sides,
+    // rear, and how far the defroster has cleared the windscreen (0..1; omsi-app
+    // condensation.rs)
+    condensation: vec4<f32>,
 };
 @group(0) @binding(11) var<uniform> enh: Enhanced;
 @group(0) @binding(13) var s_lin: sampler;

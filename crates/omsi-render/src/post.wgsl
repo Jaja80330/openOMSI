@@ -27,6 +27,9 @@ struct PostParams {
 @group(0) @binding(2) var s_lin: sampler;
 @group(0) @binding(3) var t_base: texture_2d<f32>;
 @group(0) @binding(4) var t_adapt: texture_2d<f32>;
+// (the tone mapping's: the screen mask, whose r under 0.5 is MIST_MASK x the share of the
+// light the player's bus's misted glass scatters there - enhanced.wgsl `pane_condensation`)
+@group(0) @binding(5) var t_mask: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -255,9 +258,40 @@ fn filmic_grade(c: vec3<f32>) -> vec3<f32> {
     return natural_tone(c * vec3<f32>(1.015, 1.0, 0.985), max(p.d.w, 1.0));
 }
 
+// What a misted pane shows of what lies behind it: half the light its film scatters is
+// diffracted forward by the droplets, within some 2 degrees for droplets of 10 um (0.61
+// lambda / radius) - about a fortieth of the picture's height at the usual field of view -
+// so the street goes soft and every light behind the glass spreads into a glowing patch:
+// that share of the picture averaged over the lobe, from the same misted glass only (the
+// frame and the dashboard beside it keep their edges).
+const MIST_MASK: f32 = 0.24;
+fn misted(uv: vec2<f32>, c: vec3<f32>) -> vec3<f32> {
+    let dims = vec2<f32>(textureDimensions(t_src));
+    let px = vec2<i32>(uv * dims);
+    let m = textureLoad(t_mask, clamp(px, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1)), 0).r;
+    if (m < 0.004 || m >= 0.5) {
+        return c;
+    }
+    let fog = clamp(m / MIST_MASK, 0.0, 1.0);
+    let radius = dims.y * 0.025;
+    var sum = c;
+    var w = 1.0;
+    for (var k = 1; k < 24; k = k + 1) {
+        let a = f32(k) * 2.3999632;
+        let r = sqrt(f32(k) / 23.0) * radius;
+        let q = uv + vec2<f32>(cos(a), sin(a)) * r / dims;
+        let qm = textureLoad(t_mask, clamp(vec2<i32>(q * dims), vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1)), 0).r;
+        if (qm > 0.004 && qm < 0.5) {
+            sum = sum + clean(textureSampleLevel(t_src, s_lin, q, 0.0).rgb);
+            w = w + 1.0;
+        }
+    }
+    return mix(c, sum / w, 0.5 * fog);
+}
+
 // The tone-mapped picture, encoded for the display (gamma), dithered.
 fn graded(in: VsOut) -> vec3<f32> {
-    let hdr = clean(textureSampleLevel(t_src, s_lin, in.uv, 0.0).rgb);
+    let hdr = misted(in.uv, clean(textureSampleLevel(t_src, s_lin, in.uv, 0.0).rgb));
     let glow = clean(textureSampleLevel(t_base, s_lin, in.uv, 0.0).rgb);
     // the eye's scattered light of what is brighter than the screen, added
     var c = hdr + glow * p.a.x;

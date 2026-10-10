@@ -498,7 +498,15 @@ fn exec_cold(s: &mut Stacks, op: &Op, p: &Program, state: &mut State, host: &mut
             s.push(v)
         }
 
-        _ => unreachable!("numeric ops run in exec_hot"),
+        // (every numeric op is exec_hot's: this cannot be reached unless the program's
+        // memory was damaged - it was, once, on an Exynos phone, and the panic ended the
+        // game, #1812; a script that does a step less beats a game that stops)
+        other => {
+            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::error!("script: instruction {other:?} reached the string/host dispatch; skipped");
+            }
+        }
     }
 }
 
@@ -506,7 +514,7 @@ fn exec_cold(s: &mut Stacks, op: &Op, p: &Program, state: &mut State, host: &mut
 /// (a model going wrong shows up as NaN far from where it started).
 fn debug_nan() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("OMSI_DEBUG_NAN").is_some())
+    *ON.get_or_init(|| omsi_cfg::flags::OMSI_DEBUG_NAN.live_os().is_some())
 }
 
 /// `$StrToFloat`: a number, or -1 when the text is none. Scripts test for that: the chura
@@ -829,6 +837,66 @@ mod tests {
         let mut vm = Vm::new();
         vm.run_init(&p, &mut st, &mut NullHost);
         assert_eq!(st.vars[p.var("a").unwrap() as usize], 2.0);
+    }
+
+    /// Aachen ibox / ticket-printer buttons (#744): the press trigger sets a flag, `_drag`
+    /// and `_off` clear it, and the frame script is what acts. The frame must run while the
+    /// flag is still set - openOMSI does that from `Player::click` via `update_scripts_only`.
+    #[test]
+    fn momentary_mouse_flag_needs_frame_before_drag_clear() {
+        let dir = std::env::temp_dir().join(format!(
+            "omsi_script_ibox_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("ibox.osc");
+        std::fs::write(
+            &script,
+            "{trigger:ibox_taste_A1}\n\t1 (S.L.ibox_taste_A1)\n{end}\n\
+             {trigger:ibox_taste_A1_drag}\n\t0 (S.L.ibox_taste_A1)\n{end}\n\
+             {trigger:ibox_taste_A1_off}\n\t0 (S.L.ibox_taste_A1)\n{end}\n\
+             {frame}\n\
+             \t(L.L.ibox_taste_A1) 1 =\n\
+             \t{if}\n\
+             \t\t(L.L.hits) 1 + (S.L.hits)\n\
+             \t{endif}\n\
+             {end}\n",
+        )
+        .unwrap();
+        let vl = dir.join("v.txt");
+        std::fs::write(&vl, "ibox_taste_A1\nhits\n").unwrap();
+        let p = compile(&CompileInput {
+            varlists: vec![vl],
+            scripts: vec![script],
+            ..Default::default()
+        });
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let taste = p.var("ibox_taste_A1").unwrap();
+        let hits = p.var("hits").unwrap();
+
+        // Wrong order (drag before frame): the flag is gone before the frame sees it.
+        let mut vm = Vm::new();
+        let mut st = State::new(&p);
+        vm.run_trigger(&p, "ibox_taste_A1", &mut st, &mut NullHost);
+        vm.run_trigger(&p, "ibox_taste_A1_drag", &mut st, &mut NullHost);
+        vm.run_frame(&p, &mut st, &mut NullHost);
+        assert_eq!(st.get(taste), 0.0);
+        assert_eq!(st.get(hits), 0.0, "drag before frame must lose the press");
+
+        // Right order (frame on press, then drag): one hit, then the flag is cleared so a
+        // held button does not repeat every frame.
+        st.set(hits, 0.0);
+        vm.run_trigger(&p, "ibox_taste_A1", &mut st, &mut NullHost);
+        vm.run_frame(&p, &mut st, &mut NullHost);
+        assert_eq!(st.get(hits), 1.0, "frame on press must see the flag");
+        vm.run_trigger(&p, "ibox_taste_A1_drag", &mut st, &mut NullHost);
+        vm.run_frame(&p, &mut st, &mut NullHost);
+        assert_eq!(st.get(hits), 1.0, "cleared flag must not hit again while held");
+        assert_eq!(st.get(taste), 0.0);
     }
 
 }

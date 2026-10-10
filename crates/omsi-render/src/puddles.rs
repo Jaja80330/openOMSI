@@ -155,7 +155,7 @@ impl Pipelines {
                     compilation_options: Default::default(),
                 }),
                 multiview_mask: None,
-                cache: None,
+                cache: crate::pipeline_cache::get(device).as_ref(),
             })
         };
         let glass_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -193,7 +193,7 @@ impl Pipelines {
                     compilation_options: Default::default(),
                 }),
                 multiview_mask: None,
-                cache: None,
+                cache: crate::pipeline_cache::get(device).as_ref(),
             })
         });
         let vehicle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -274,7 +274,7 @@ impl Pipelines {
                             compilation_options: Default::default(),
                         }),
                         multiview_mask: None,
-                        cache: None,
+                        cache: crate::pipeline_cache::get(device).as_ref(),
                     }));
                 }
             }
@@ -311,7 +311,7 @@ impl Pipelines {
                 compilation_options: Default::default(),
             }),
             multiview_mask: None,
-            cache: None,
+            cache: crate::pipeline_cache::get(device).as_ref(),
         });
         Self {
             trace: pipeline("fs_trace"),
@@ -454,7 +454,7 @@ impl Targets {
         let blur_x_bg = group(&trace);
         let blur_y_bg = group(&blur);
         let resolve_bg = group(&filtered);
-        let post_group = |base, adapt| {
+        let post_group = |base, adapt, screen_mask| {
             r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("post with puddle reflections"),
                 layout: &r.post_layout,
@@ -470,13 +470,14 @@ impl Targets {
                     },
                     binding(3, base),
                     binding(4, adapt),
+                    binding(5, screen_mask),
                 ],
             })
         };
-        let down_bg = post_group(&hdr.mask, &r.white_texture.view);
+        let down_bg = post_group(&hdr.mask, &r.white_texture.view, &r.black_texture.view);
         let tonemap_bg = [
-            post_group(&hdr.up[0], &r.adapt_views[0]),
-            post_group(&hdr.up[0], &r.adapt_views[1]),
+            post_group(&hdr.up[0], &r.adapt_views[0], &hdr.mask),
+            post_group(&hdr.up[0], &r.adapt_views[1], &hdr.mask),
         ];
         let classic_bg = r.picture_group(&view);
         Self {
@@ -595,13 +596,9 @@ impl Renderer {
             projection_trace: [
                 proj.z_axis.z,
                 proj.w_axis.z,
-                omsi_cfg::env::var("OMSI_DEBUG_PUDDLES")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
+                omsi_cfg::flags::OMSI_DEBUG_PUDDLES.parse()
                     .unwrap_or(0.0),
-                omsi_cfg::env::var("OMSI_PUDDLE_THICKNESS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
+                omsi_cfg::flags::OMSI_PUDDLE_THICKNESS.parse()
                     .unwrap_or(0.12),
             ],
             vehicle_plane: plane,
@@ -677,7 +674,7 @@ impl Renderer {
             });
             pass.set_bind_group(0, scene.camera_bind_group.as_ref().unwrap(), &[]);
             pass.set_bind_group(2, &pipelines.vehicle_bg, &[]);
-            if omsi_cfg::env::var_os("OMSI_NO_PUDDLE_VEHICLE").is_none() {
+            if !omsi_cfg::flags::OMSI_NO_PUDDLE_VEHICLE.is_set() {
                 if let Some(first) = vehicle_batches.first() {
                     pass.set_bind_group(
                         1,
@@ -707,7 +704,7 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-        if omsi_cfg::env::var_os("OMSI_NO_PUDDLE_GLASS_DEPTH").is_none()
+        if !omsi_cfg::flags::OMSI_NO_PUDDLE_GLASS_DEPTH.is_set()
             && batches
                 .iter()
                 .any(|b| reflection_glass(&scene.materials[b.material as usize].uniform))
@@ -784,7 +781,7 @@ fn reflection_plane(point: DVec3, normal: Vec3, origin: DVec3) -> glam::Vec4 {
 
 fn vehicle_origins(lighting: &Lighting, camera: &Camera) -> Vec<DVec3> {
     if lighting.puddle_ground.is_none()
-        || omsi_cfg::env::var_os("OMSI_NO_PUDDLE_VEHICLE").is_some()
+        || omsi_cfg::flags::OMSI_NO_PUDDLE_VEHICLE.is_set()
         || !lighting
             .inside
             .is_some_and(|(o, _, _)| o.distance(camera.position) < 60.0)

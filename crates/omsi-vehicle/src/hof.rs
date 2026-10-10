@@ -26,12 +26,9 @@ impl Terminus {
 
     /// Name used by the destination menu: the identifier on the second `[addterminus]` line.
     pub fn menu_name(&self) -> String {
-        let first = self.strings.iter().find(|s| !s.trim().is_empty()).map(String::as_str).unwrap_or("").trim();
-        if !first.is_empty() && (first.eq_ignore_ascii_case("no") || is_destination_image_path(first) || has_route_label(&self.texture_id)) {
-            let id = self.texture_id.trim();
-            if !id.is_empty() {
-                return id.to_string();
-            }
+        let name = self.texture_id.trim();
+        if !name.is_empty() {
+            return name.to_string();
         }
         self.display_name()
     }
@@ -40,11 +37,6 @@ impl Terminus {
 fn is_destination_image_path(s: &str) -> bool {
     let s = s.trim().to_ascii_lowercase();
     s.ends_with(".bmp") || s.ends_with(".tga") || s.ends_with(".png")
-}
-
-fn has_route_label(s: &str) -> bool {
-    let Some((prefix, _)) = s.trim().split_once(':') else { return false };
-    !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit() || c.is_ascii_alphabetic())
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -81,6 +73,27 @@ impl Hof {
     pub fn load(path: &Path) -> Result<Hof, omsi_cfg::CfgError> {
         let f = CfgFile::read(path)?;
         Ok(Self::parse(&f))
+    }
+
+    /// Whether the IBIS trips carry line `line` (a map's line name, "11-11s"): a trip coded
+    /// line x 100 + route, or one named after the line ("91.06A -> MASSY GARE").
+    pub fn has_line(&self, line: &str) -> bool {
+        let l = line.trim().to_ascii_lowercase();
+        if l.is_empty() {
+            return false;
+        }
+        let digits: String = l.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let number = digits.parse::<i32>().ok().filter(|n| *n > 0);
+        let boundary = |rest: &str| rest.chars().next().is_none_or(|c| !c.is_ascii_alphanumeric());
+        self.info_trips.iter().any(|t| {
+            let code = omsi_cfg::parse_i32(&t.code);
+            let head = t.name.split("->").next().unwrap_or("").trim().to_ascii_lowercase();
+            let named = !head.is_empty()
+                && (l.strip_prefix(head.as_str()).is_some_and(boundary)
+                    || (l.ends_with(|c: char| c.is_ascii_digit())
+                        && head.strip_prefix(l.as_str()).is_some_and(|r| r.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))));
+            named || number.is_some_and(|n| code >= 100 && code / 100 == n)
+        })
     }
 
     /// Only the `[name]` of a depot file ("" when it has none), kept for the session: the
@@ -351,6 +364,16 @@ pub fn depot_anywhere(name: &str) -> Option<Hof> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_depot_file_carries_a_line_by_its_trip_codes_or_names() {
+        let trip = |code: &str, name: &str| InfoTrip { code: code.into(), name: name.into(), ..Default::default() };
+        let global = Hof { info_trips: vec![trip("1101", "11 -> PETIT VILTAIN"), trip("1401", "14 -> MOULON")], ..Default::default() };
+        let inter = Hof { info_trips: vec![trip("001", "91.06A -> MASSY GARE"), trip("005", "91.06C -> MASSY GARE")], ..Default::default() };
+        assert!(global.has_line("11-11s") && global.has_line("14"));
+        assert!(!global.has_line("1") && !global.has_line("91.06C") && !global.has_line(""));
+        assert!(inter.has_line("91.06C") && inter.has_line("91.06") && !inter.has_line("11-11s"));
+    }
+
     use super::*;
 
     /// #896: the bus's own depot of the map's place, not the first of its folder.
@@ -425,9 +448,46 @@ mod tests {
     }
 
     #[test]
-    fn normal_hof_menu_name_keeps_display_text() {
+    fn numeric_hof_menu_name_uses_the_ident() {
         let t = Terminus { texture_id: "910".into(), strings: vec!["AEC".into()], ..Default::default() };
-        assert_eq!(t.menu_name(), "AEC");
+        assert_eq!(t.menu_name(), "910");
+        assert_eq!(t.display_name(), "AEC");
+    }
+
+    #[test]
+    fn menu_names_do_not_use_matrix_text_or_empty_destination_markers() {
+        let t = Terminus { texture_id: " Matrix check ".into(), strings: vec!["###".into(), "M A T R I X".into()], ..Default::default() };
+        assert_eq!(t.menu_name(), "Matrix check");
+        assert_eq!(t.display_name(), "###");
+
+        let empty = Terminus { code: 0, texture_id: "empty".into(), all_exit: true, strings: vec!["A".into()], ..Default::default() };
+        assert_eq!(empty.menu_name(), "empty");
+        assert_eq!(empty.strings, vec!["A"]);
+    }
+
+    #[test]
+    fn unnamed_hof_menu_entry_falls_back_to_display_text() {
+        let t = Terminus { strings: vec!["".into(), "Fallback".into()], ..Default::default() };
+        assert_eq!(t.menu_name(), "Fallback");
+    }
+
+    #[test]
+    fn destination_names_and_blank_displays_survive_both_hof_formats() {
+        // Synthetic records: both formats keep a destination whose display is blank.
+        let records = [
+            "[addterminus_allexit]\n0\nempty\n\n\n\n\n\n[addterminus_allexit]\n505\nMatrix check\n###\nM A T R I X\nCHECK\nx\nMC\n",
+            "[addterminus_list]\n{ALLEX}\t0\tempty\t\t\t\t\t\n{ALLEX}\t505\tMatrix check\t###\tM A T R I X\tCHECK\tx\tMC\n[end]\n",
+        ];
+        for records in records {
+            let h = Hof::parse(&CfgFile::from_str("menu.hof", &format!("stringcount_terminus\n5\n{records}")));
+            assert_eq!(h.termini.len(), 2);
+            let empty = &h.termini[0];
+            assert_eq!((empty.code, empty.menu_name(), empty.all_exit), (0, "empty".into(), true));
+            assert_eq!(empty.strings, vec![""; 5]);
+            let check = &h.termini[1];
+            assert_eq!((check.code, check.menu_name()), (505, "Matrix check".into()));
+            assert_eq!(check.strings, vec!["###", "M A T R I X", "CHECK", "x", "MC"]);
+        }
     }
 
     #[test]

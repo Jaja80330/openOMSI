@@ -263,7 +263,7 @@ pub fn asset_name(version: &str) -> Option<String> {
 
 // --- the release ----------------------------------------------------------------------------
 
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     // (a read waits 30 s at most - a stalled download goes on with a range request, so a
     // short wait costs nothing; the connection gets 20 s, enough for a slow line or a
     // resolver that tries IPv6 first)
@@ -330,7 +330,7 @@ fn short_error(e: &ureq::Error) -> String {
 
 /// The latest release when it is newer than this build and has a file for this platform.
 pub fn latest() -> anyhow::Result<Option<Release>> {
-    let url = omsi_cfg::env::var("OMSI_UPDATE_URL").unwrap_or_else(|_| LATEST_API.to_string());
+    let url = omsi_cfg::flags::OMSI_UPDATE_URL.var().map(str::to_string).unwrap_or_else(|| LATEST_API.to_string());
     match fetch_text(&url).and_then(|t| Ok(serde_json::from_str::<serde_json::Value>(&t)?)) {
         Ok(v) => parse_release(&v, current_version()),
         // (the API: an address over its limit gets 403 for an hour, and some networks reach
@@ -602,7 +602,11 @@ fn program_path(exe: &Path) -> PathBuf {
         s = t.to_string();
     }
     while let Some(t) = s.strip_suffix(OLD) {
-        s = t.to_string();
+        // (`openomsi.exe.2.old-update`: put aside beside an older one, see `aside_of`)
+        s = match t.rsplit_once('.') {
+            Some((head, n)) if !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => head.to_string(),
+            _ => t.to_string(),
+        };
     }
     if s == exe.to_string_lossy() {
         exe.to_path_buf()
@@ -618,7 +622,7 @@ fn short_path(p: &Path) -> String {
     if n <= 48 {
         s
     } else {
-        format!("…{}", s.chars().skip(n - 46).collect::<String>())
+        format!("...{}", s.chars().skip(n - 46).collect::<String>())
     }
 }
 
@@ -648,8 +652,30 @@ fn old_of(p: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Where `target` is put aside: its `*.old-update`, or `*.<n>.old-update` while an earlier
+/// one cannot be deleted - still loaded (the launcher's DirectX shader compiler,
+/// `dxcompiler.dll`) or held by a virus scanner. Windows renames nothing onto a file that
+/// is there, and the update failed with "cannot be replaced" (#1753).
+fn aside_of(target: &Path) -> PathBuf {
+    let first = old_of(target);
+    remove_any(&first);
+    if !first.exists() && !first.is_symlink() {
+        return first;
+    }
+    for n in 2..100 {
+        let mut s = target.as_os_str().to_os_string();
+        s.push(format!(".{n}{OLD}"));
+        let p = PathBuf::from(s);
+        remove_any(&p);
+        if !p.exists() && !p.is_symlink() {
+            return p;
+        }
+    }
+    first
+}
+
 /// Unpack `zip` into `to` (a fresh folder), with the files' Unix modes and links.
-fn unpack(zip: &Path, to: &Path) -> anyhow::Result<()> {
+pub(crate) fn unpack(zip: &Path, to: &Path) -> anyhow::Result<()> {
     let _ = std::fs::remove_dir_all(to);
     std::fs::create_dir_all(to)?;
     let mut a = zip::ZipArchive::new(std::fs::File::open(zip)?)?;
@@ -728,8 +754,7 @@ pub fn install_archive(zip: &Path, place: &Place) -> anyhow::Result<()> {
     let result = (|| -> anyhow::Result<()> {
         for name in &items {
             let target = target_of(name, place);
-            let old = old_of(&target);
-            remove_any(&old);
+            let old = aside_of(&target);
             let had = target.exists() || target.is_symlink();
             if had {
                 std::fs::rename(&target, &old).map_err(|e| anyhow::anyhow!("{} cannot be replaced ({e}) - is the folder writable?", short_path(&target)))?;
@@ -874,7 +899,7 @@ mod tests {
     fn the_platform_file_of_a_github_release() {
         let name = asset_name("0.1.9").unwrap();
         let v = serde_json::json!({
-            "tag_name": "v0.1.9", "html_url": "https://github.com/openOMSI-Project/openOMSI/releases/tag/v0.1.9", "body": "notes",
+            "tag_name": "v0.1.9", "html_url": "https://github.com/openOMSI-org/openOMSI/releases/tag/v0.1.9", "body": "notes",
             "assets": [
                 {"name": "openOMSI-0.1.9-server-linux-x64.zip", "browser_download_url": "https://x/server", "size": 5},
                 {"name": name, "browser_download_url": "https://x/mine", "size": 42, "digest": "sha256:ABCDEF"}
@@ -963,6 +988,7 @@ mod tests {
         assert_eq!(program_path(Path::new("/home/me/openOMSI/openomsi.old-update")), PathBuf::from("/home/me/openOMSI/openomsi"));
         assert_eq!(program_path(Path::new("/home/me/openOMSI/openomsi.old-update (deleted)")), PathBuf::from("/home/me/openOMSI/openomsi"));
         assert_eq!(program_path(Path::new("C:\\Games\\openOMSI\\openomsi.exe.old-update")), PathBuf::from("C:\\Games\\openOMSI\\openomsi.exe"));
+        assert_eq!(program_path(Path::new("C:\\Games\\openOMSI\\openomsi.exe.2.old-update")), PathBuf::from("C:\\Games\\openOMSI\\openomsi.exe"));
     }
 
     #[test]

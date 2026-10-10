@@ -119,14 +119,17 @@ fn lamp_airlight(c: vec3<f32>, d: vec3<f32>, start: f32, len: f32, jitter: f32) 
                 var half = 0.0;
                 if (l.extra.z != 0.0 || l.dir.w > -1.5) {
                     // a beam (a headlamp, a spot): lit only where its cone or cut-off lets
-                    // it - a sliver of the angles the lamp is seen under, which the nodes
-                    // over the angle missed. Sixteen steps along the way instead, weighted
-                    // by the inverse square (in the angle's terms: dphi = h dt / r^2).
-                    let dt = (tb - ta) / 16.0;
+                    // it - a sliver of the angles the lamp is seen under, which the five
+                    // nodes missed. Sixteen even steps over that angle instead (dphi =
+                    // h dt / r^2: the inverse square is in the step). (Sixteen even steps
+                    // along the way put the few next to the lamp, where nearly all of its
+                    // light is, a metre or more apart: the pixels' staggered steps came
+                    // out as a coarse checker in the fog round every headlamp.)
+                    let pa = atan((ta - t0) / hh);
+                    let dphi = (atan((tb - t0) / hh) - pa) / 16.0;
                     for (var q = 0u; q < 16u; q = q + 1u) {
-                        let tq = ta + (f32(q) + jitter) * dt;
+                        let tq = t0 + hh * tan(pa + (f32(q) + jitter) * dphi);
                         let to = l.pos.xyz - (c + d * tq);
-                        let r2 = max(dot(to, to), hh * hh);
                         let ld = to * inverseSqrt(max(dot(to, to), 1e-6));
                         var beam = 0.0;
                         if (l.extra.z != 0.0) {
@@ -134,7 +137,7 @@ fn lamp_airlight(c: vec3<f32>, d: vec3<f32>, start: f32, len: f32, jitter: f32) 
                         } else {
                             beam = smoothstep(l.dir.w, l.extra.x, dot(-ld, l.dir.xyz));
                         }
-                        acc = acc + beam * fog_phase(dot(ld, d)) * hh * dt / r2;
+                        acc = acc + beam * fog_phase(dot(ld, d)) * dphi;
                     }
                     half = 1.0;
                 } else {
@@ -220,8 +223,12 @@ fn precip_light(x: vec3<f32>, to_eye: vec3<f32>, snow: bool) -> vec3<f32> {
                     k = k * (0.05 + 0.95 * smoothstep(-0.1, 0.3, ld.z));
                 }
                 // (the scattering towards the eye relative to an even one: a drop's light
-                // goes on forwards, a flake's every way)
-                let c = dot(-ld, -to_eye);
+                // goes on forwards, a flake's every way. The angle is the one between the
+                // light's way from the lamp, -ld, and on to the eye: taken against -to_eye
+                // it put the forward peak behind the drop, and the drops in a bus's own
+                // beams, seen from behind the lamps, shone a hundred times too bright as
+                // white streaks down the road ahead)
+                let c = dot(-ld, to_eye);
                 let lobe = select(fog_phase(c), 0.7 * hg_phase(c, 0.3) + 0.3 / (4.0 * PI), snow) * 4.0 * PI;
                 e = e + l.color.rgb * l.color.w * enh.lights.y * k * lobe;
             }

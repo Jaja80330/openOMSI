@@ -1,5 +1,5 @@
 //! The title screen: the launcher as a game's main menu, when it is the menu of the one full
-//! screen window (see the app's `shell.rs`). The chosen bus, in the chosen light, fills the
+//! screen window (see the app's `big_picture.rs`). The chosen bus, in the chosen light, fills the
 //! screen behind a column of entries - Continue, Drive, Multiplayer, Profile, Settings,
 //! Controls, Mods, Quit - worked with the mouse or the keyboard (arrows, Enter, Escape).
 //! The entries open the launcher's pages as they are; Escape or "Main menu" comes back here.
