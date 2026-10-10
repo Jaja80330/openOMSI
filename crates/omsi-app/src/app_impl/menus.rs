@@ -247,6 +247,7 @@ impl App {
     /// script ask of the menu by name). False when `id` is none of them.
     pub(crate) fn page_action(&mut self, id: &str) -> bool {
         match id {
+            "swap" | "place" if self.spawn_refused() => {}
             "swap" | "place" => {
                 // (a plain "Place a vehicle" puts one beside; "Swap" in the driven one's place)
                 self.menus.swap_pending = id == "swap" && self.player.is_some();

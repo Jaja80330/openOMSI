@@ -631,6 +631,12 @@ fn start_sheet(l: &mut Launcher, r: Rect) -> bool {
     }
     y += 42.0;
 
+    // (a server that has its players start on foot: no choice)
+    if l.state.foot_only() {
+        l.state.choice.on_foot = true;
+        l.ui.text_in("This server has its players start on foot", Rect::new(inner.x, y, inner.w, 34.0), 13.0, Weight::Medium, TEXT_SOFT, Align::Left);
+        return false;
+    }
     let mut on_foot = l.state.choice.on_foot;
     if l.ui.toggle("ps-on-foot", Rect::new(inner.x, y, inner.w, 34.0), &mut on_foot, "Start on foot (place a bus from the game menu)") {
         l.state.choice.on_foot = on_foot;

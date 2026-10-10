@@ -51,6 +51,12 @@ pub struct ServerInfo {
     /// The server's own login (`login`): where the launcher has the player log in before
     /// joining (empty: none).
     pub login: String,
+    /// Players may put a bus of their own into the world from the game's menu (`spawn`;
+    /// None: not said - an older server - and then they may not).
+    pub spawn: Option<bool>,
+    /// Players start on foot there (`foot_only`): the launcher offers no bus, the game's
+    /// menu none either; they take the wheel of a bus nobody drives.
+    pub foot_only: bool,
     /// The players now, for `GET /players`.
     pub player_list: Vec<PlayerInfo>,
     /// `POST /admin` from this machine with this password (empty: no such door).
@@ -206,7 +212,7 @@ pub fn players_json(players: &[PlayerInfo]) -> String {
 impl ServerInfo {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"name\":{},\"motd\":{},\"map\":{},\"players\":{},\"max_players\":{},\"version\":{},\"icon\":{},\"time\":{},\"weather\":{},\"password\":{},\"protocol\":{},\"vehicles\":{},\"login\":{},\"ttdata\":{},\"world\":{}}}",
+            "{{\"name\":{},\"motd\":{},\"map\":{},\"players\":{},\"max_players\":{},\"version\":{},\"icon\":{},\"time\":{},\"weather\":{},\"password\":{},\"protocol\":{},\"vehicles\":{},\"login\":{},\"spawn\":{},\"foot_only\":{},\"ttdata\":{},\"world\":{}}}",
             json_str(&self.name),
             json_str(&self.motd),
             json_str(&self.map),
@@ -220,6 +226,8 @@ impl ServerInfo {
             crate::PROTOCOL,
             json_str(&self.vehicles.join(";")),
             json_str(&self.login),
+            self.spawn.map(|b| if b { "true" } else { "false" }).unwrap_or("null"),
+            self.foot_only,
             json_str(&crate::ttdata::version()),
             self.world.map(|w| w.to_json()).unwrap_or_else(|| "null".into())
         )
@@ -242,6 +250,12 @@ impl ServerInfo {
             password: json_value(s, "password").map(|v| v.trim() == "true").unwrap_or(false),
             vehicles: text("vehicles").map(|v| v.split(';').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
             login: text("login").unwrap_or_default(),
+            spawn: json_value(s, "spawn").and_then(|v| match v.trim() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            }),
+            foot_only: json_value(s, "foot_only").map(|v| v.trim() == "true").unwrap_or(false),
             reached_at: String::new(),
             ..Default::default()
         })
@@ -1096,6 +1110,12 @@ mod tests {
         assert_eq!(b.players, 2);
         assert_eq!(b.max_players, 16);
         assert!(!b.icon.is_empty());
+        // the rules for the players' buses: not said (an older server), or said
+        assert_eq!((b.spawn, b.foot_only), (None, false));
+        let r = ServerInfo::from_json(&ServerInfo { spawn: Some(true), foot_only: true, ..i.clone() }.to_json()).unwrap();
+        assert_eq!((r.spawn, r.foot_only), (Some(true), true));
+        let r = ServerInfo::from_json(&ServerInfo { spawn: Some(false), ..i }.to_json()).unwrap();
+        assert_eq!(r.spawn, Some(false));
     }
 
     #[test]

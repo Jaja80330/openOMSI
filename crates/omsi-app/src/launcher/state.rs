@@ -533,6 +533,20 @@ impl State {
     }
 
     /// The buses the host or server offers (None: any, it has not said).
+    /// What the server being joined says about itself (None: not joining, or not asked yet).
+    pub fn joined_info(&self) -> Option<&omsi_net::ws::ServerInfo> {
+        if !self.joining() {
+            return None;
+        }
+        let key = self.joined_server.clone().unwrap_or_else(|| self.choice.lan_addr.clone());
+        self.server_info.get(&key)?.1.as_ref().ok()
+    }
+
+    /// The server being joined has its players start on foot (`foot_only`).
+    pub fn foot_only(&self) -> bool {
+        self.joined_info().is_some_and(|i| i.foot_only)
+    }
+
     pub fn host_vehicles(&self) -> Option<Vec<String>> {
         if self.choice.lan_mode != "join" {
             return None;
@@ -732,7 +746,7 @@ impl State {
             passengers: Some(c.passengers),
             schedule: Some(c.schedule),
             autostart: Some(c.autostart && !self.joining()),
-            on_foot: Some(c.on_foot),
+            on_foot: Some(c.on_foot || self.foot_only()),
             profile: Some(self.config.profile.clone()).filter(|p| !p.is_empty()),
             lan: Some(lan),
             lan_name: None,

@@ -57,6 +57,7 @@ impl App {
         self.tick_voice(dt);
         self.tick_radio();
         self.tick_self_duty(dt);
+        self.tick_rules(dt);
         // the server's welcome, once the world and the bus are there
         if self.welcome.is_none() && self.world.is_some() && self.player.is_some() {
             if let Some((text, pictures)) = crate::welcome::take() {
@@ -107,6 +108,23 @@ impl App {
                 }
                 self.self_duty = Some(on);
                 self.self_duty_ask = 60.0;
+            }
+            return;
+        }
+        // the rules for the players' own buses (`rules spawn=on|off foot-only=on|off`): a
+        // player's game hosting the session lets its friends put buses into the world (a
+        // dedicated server answers by its own server.cfg)
+        if text == "rules?" {
+            if lan.role == omsi_net::Role::Host {
+                if let Some(l) = self.net.lan.as_mut() {
+                    l.command(from, "rules spawn=on foot-only=off");
+                }
+            }
+            return;
+        }
+        if let Some(arg) = text.strip_prefix("rules ") {
+            if from == 1 && lan.role == omsi_net::Role::Client {
+                self.take_rules(arg);
             }
             return;
         }
@@ -163,6 +181,70 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// The server's rules for the players' own buses (`rules` from it): words
+    /// `spawn=on|off` and `foot-only=on|off`, the others left for later games. A change is
+    /// told to the player.
+    fn take_rules(&mut self, arg: &str) {
+        let on = |v: &str| matches!(v.trim(), "on" | "1" | "true" | "yes");
+        let (mut spawn, mut foot) = (self.server_spawn, self.server_foot_only);
+        for w in arg.split_whitespace() {
+            match w.split_once('=') {
+                Some(("spawn", v)) => spawn = Some(on(v)),
+                Some(("foot-only", v)) => foot = Some(on(v)),
+                _ => {}
+            }
+        }
+        let was = self.may_spawn();
+        let known = self.server_spawn.is_some() || self.server_foot_only.is_some();
+        self.server_spawn = spawn;
+        self.server_foot_only = foot;
+        self.rules_ask = 60.0;
+        if known && was != self.may_spawn() {
+            let msg = if self.may_spawn() { "This server lets you put a bus of your own into the world again" } else { "This server no longer lets you put a bus of your own into the world" };
+            self.service_msg = Some((msg.into(), 6.0));
+        }
+    }
+
+    /// Whether the player may put a bus of their own into the world (the menu's "Place a
+    /// vehicle" and "Swap"): anywhere but on a server joined, there only when it says so
+    /// (`rules spawn=on`) and does not have its players on foot (`foot-only`).
+    pub(crate) fn may_spawn(&self) -> bool {
+        let client = self.net.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client);
+        !client || (self.server_spawn == Some(true) && self.server_foot_only != Some(true))
+    }
+
+    /// A bus put into the world, refused when the server joined does not allow it: the
+    /// player is told so.
+    pub(crate) fn spawn_refused(&mut self) -> bool {
+        if self.may_spawn() {
+            return false;
+        }
+        let msg = if self.server_foot_only == Some(true) {
+            "On this server you go on foot: take the wheel of a bus nobody drives (G at its driver's place)"
+        } else {
+            "This server does not let you put a bus of your own into the world"
+        };
+        self.service_msg = Some((msg.into(), 6.0));
+        true
+    }
+
+    /// Ask the server joined its rules for the players' own buses now and then (the answer,
+    /// or its change, may be lost on the way).
+    fn tick_rules(&mut self, dt: f32) {
+        let Some(lan) = self.net.lan.as_mut().filter(|l| l.role == omsi_net::Role::Client && l.connected) else {
+            self.server_spawn = None;
+            self.server_foot_only = None;
+            self.rules_ask = 0.0;
+            return;
+        };
+        self.rules_ask -= dt;
+        if self.rules_ask <= 0.0 {
+            lan.command(1, "rules?");
+            let known = self.server_spawn.is_some() || self.server_foot_only.is_some();
+            self.rules_ask = if known { 60.0 } else { 5.0 };
+        }
     }
 
     /// Ask the server joined whether its players take their own duties (now and then: the

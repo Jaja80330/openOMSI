@@ -262,13 +262,8 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
     }
     // joining a session: no duty chosen here - it is taken in the game (the button beside the
     // radio's) or given by the dispatcher; the player may start on foot
+    // (starting on foot is chosen on the bus step, before the bus)
     if l.state.joining() {
-        let mut v = l.state.choice.on_foot;
-        if l.ui.toggle("onfoot-mp", Rect::new(body.x, y, body.w, ROW), &mut v, "Start on foot") {
-            l.state.choice.on_foot = v;
-            l.state.touched();
-        }
-        y += ROW + 10.0;
         l.ui.paragraph("In multiplayer the duty is taken in the game: with the duty button beside the radio's when the server allows it, or given by the dispatcher.", Vec2::new(body.x, y), body.w, 12.5, Weight::Regular, TEXT_DIM);
         entry_select(l, body, body.bottom() - ROW, true);
         return;
@@ -849,7 +844,45 @@ fn manufacturer_matches(model: &BusManufacturer, q: &str) -> bool {
     q.is_empty() || model.name.to_lowercase().contains(q) || model.variants.iter().any(|v| variant_matches(v, q))
 }
 
+/// The bus step: the bus to drive, or - joining a session - first whether the player
+/// starts on foot (then no bus is chosen: one nobody drives is taken there, or put into the
+/// world from the game's menu when the server allows it). A server that has its players
+/// start on foot (`foot_only`) offers no bus at all.
 fn step_bus(l: &mut Launcher, r: Rect) {
+    if !l.state.joining() {
+        return step_bus_list(l, r);
+    }
+    let forced = l.state.foot_only();
+    if forced && !l.state.choice.on_foot {
+        l.state.choice.on_foot = true;
+        l.state.touched();
+    }
+    let row = Rect::new(r.x, r.y, r.w, ROW);
+    if forced {
+        l.ui.solid(row);
+        l.ui.p().rounded(row, RADIUS, FIELD);
+        l.ui.icon("directions_walk", Vec2::new(row.x + 18.0, row.center().y), 16.0, ACCENT);
+        l.ui.text_in("This server has its players start on foot", Rect::new(row.x + 36.0, row.y, row.w - 44.0, row.h), 13.0, Weight::Medium, TEXT, Align::Left);
+    } else {
+        let mut v = l.state.choice.on_foot;
+        if l.ui.toggle("onfoot-mp", row, &mut v, "Start on foot") {
+            l.state.choice.on_foot = v;
+            l.state.touched();
+        }
+    }
+    if !l.state.choice.on_foot {
+        return step_bus_list(l, Rect::new(r.x, r.y + ROW + 12.0, r.w, (r.h - ROW - 12.0).max(120.0)));
+    }
+    let spawn = l.state.joined_info().and_then(|i| i.spawn) == Some(true) && !forced;
+    let text = if spawn {
+        "You start on foot. There, G at the driver's place of a bus nobody drives takes the wheel; the game menu puts a bus of your own into the world."
+    } else {
+        "You start on foot. There, G at the driver's place of a bus nobody drives takes the wheel."
+    };
+    l.ui.paragraph(text, Vec2::new(r.x, r.y + ROW + 20.0), r.w, 13.0, Weight::Regular, TEXT_DIM);
+}
+
+fn step_bus_list(l: &mut Launcher, r: Rect) {
     l.ui.heading(Rect::new(r.x, r.y, r.w, 24.0), "Choose a bus", None);
     let search = Rect::new(r.x, r.y + 32.0, r.w, ROW);
     let search_changed = l.ui.text_input("bus-filter", search, &mut l.drive.bus_filter, "Search buses...", Some("search"));

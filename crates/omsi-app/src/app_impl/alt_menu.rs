@@ -13,9 +13,13 @@ impl App {
         let mut out = [false; 15];
         for (k, &(id, ..)) in TILES.iter().enumerate() {
             out[k] = match id {
-                "place" | "arrows" | "world" | "controls" => true,
+                "arrows" | "world" | "controls" => true,
+                // (on a server joined only when it lets its players put a bus of their own
+                // into the world)
+                "place" => self.may_spawn(),
+                "swap" => bus && self.may_spawn(),
                 "switch" => bus || !self.session.placed.is_empty(),
-                "remove" | "swap" | "dest" | "refuel" | "wash" | "repair" | "reset" => bus,
+                "remove" | "dest" | "refuel" | "wash" | "repair" | "reset" => bus,
                 "teleport" => bus && !server && self.menus.navigator.is_some(),
                 // (on a server the duty is taken with the button beside the radio's)
                 "duty" => bus && !client,

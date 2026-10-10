@@ -52,6 +52,13 @@ pub(crate) struct App {
     pub(crate) self_duty: Option<bool>,
     /// Seconds before the server is asked again.
     pub(crate) self_duty_ask: f32,
+    /// What the dedicated server joined says about the players' own buses (`rules`): they
+    /// may put one into the world from the menu (`spawn`), they start on foot and choose
+    /// no vehicle (`foot-only`). None: not said yet.
+    pub(crate) server_spawn: Option<bool>,
+    pub(crate) server_foot_only: Option<bool>,
+    /// Seconds before the server is asked its rules again.
+    pub(crate) rules_ask: f32,
     /// The server's welcome, shown over the game until its Play button (`welcome`); the
     /// messages' window is shown in its place.
     pub(crate) welcome: Option<crate::welcome::Welcome>,

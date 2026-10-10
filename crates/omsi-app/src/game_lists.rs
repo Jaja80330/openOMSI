@@ -2798,7 +2798,11 @@ fn vehicle_pages(app: &App) -> Vec<Page> {
     if has || !app.session.placed.is_empty() {
         fleet.push(button("Drive the next vehicle", "Switch", "Take the wheel of another vehicle standing in the world", "switch"));
     }
-    fleet.push(opens("Place a vehicle", "Place a vehicle of your choice", "place"));
+    // (on a server joined only when it lets its players put a bus of their own into the world)
+    let spawn = app.may_spawn();
+    if spawn {
+        fleet.push(opens("Place a vehicle", "Place a vehicle of your choice", "place"));
+    }
     if has {
         fleet.push(button("Couple", "Couple", "Couple the vehicle to the one in front of or behind it", "couple"));
         fleet.push(button("Uncouple", "Uncouple", "Separate the coupled vehicles", "uncouple"));
@@ -2808,7 +2812,9 @@ fn vehicle_pages(app: &App) -> Vec<Page> {
         fleet.push(button("Remove this vehicle", "Remove", "Removes the current vehicle", "remove"));
         // (#728: another bus in this one's place, or this one again with its files read
         // anew - a script or a .bus changed - without starting the game again)
-        fleet.push(button("Swap for another vehicle", "Swap", "Put another vehicle in this one's place and drive it", "swap"));
+        if spawn {
+            fleet.push(button("Swap for another vehicle", "Swap", "Put another vehicle in this one's place and drive it", "swap"));
+        }
         fleet.push(button("Reload this vehicle", "Reload", "Read the vehicle's files again (.bus, model and sound configuration, scripts) and drive it from here", "reload"));
     }
     if !app.session.placed.is_empty() {
