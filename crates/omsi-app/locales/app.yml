@@ -32615,3 +32615,59 @@ _version: 2
 "Destination":
   fr: "Girouette"
   de: "Ziel"
+
+"Quick menu":
+  fr: "Menu rapide"
+  de: "Schnellmenü"
+
+"New bus":
+  fr: "Nouveau bus"
+  de: "Neuer Bus"
+
+"Switch to another bus":
+  fr: "Changer de bus"
+  de: "Anderen Bus fahren"
+
+"Delete bus":
+  fr: "Supprimer le bus"
+  de: "Bus löschen"
+
+"Place bus elsewhere":
+  fr: "Déplacer le bus"
+  de: "Bus versetzen"
+
+"Swap bus":
+  fr: "Remplacer le bus"
+  de: "Bus tauschen"
+
+"Set timetable":
+  fr: "Choisir un service"
+  de: "Fahrplan wählen"
+
+"Destination and route":
+  fr: "Girouette et ligne"
+  de: "Ziel und Linie"
+
+"Repair bus":
+  fr: "Réparer le bus"
+  de: "Bus reparieren"
+
+"Route helpers":
+  fr: "Aides à l'itinéraire"
+  de: "Routenhilfen"
+
+"Driver profile":
+  fr: "Profil conducteur"
+  de: "Fahrerprofil"
+
+"Back on its wheels":
+  fr: "Remettre sur ses roues"
+  de: "Wieder auf die Räder"
+
+"Route helpers shown":
+  fr: "Aides à l'itinéraire affichées"
+  de: "Routenhilfen an"
+
+"Route helpers hidden":
+  fr: "Aides à l'itinéraire masquées"
+  de: "Routenhilfen aus"

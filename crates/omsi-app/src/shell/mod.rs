@@ -16,6 +16,7 @@ use omsi_ui::{Draw, Gpu, Layer, Vertex};
 
 use crate::launcher::ui::Ui;
 
+pub(crate) mod alt_menu;
 pub(crate) mod pause;
 
 /// What a click on one of the screens asks of the game.
@@ -39,6 +40,8 @@ pub(crate) enum Action {
     CloseDropdown,
     /// A request of the photo mode's panel.
     Photo(crate::photo::Request),
+    /// Tile `k` of the quick menu (usize::MAX: a click beside it).
+    Alt(usize),
 }
 
 /// The screens' toolkit, their graphics and what was drawn last.

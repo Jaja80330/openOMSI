@@ -88,7 +88,7 @@ impl App {
         // it is not put back where the look began - that was the cursor's jump as the button
         // came up - its movement only counts afresh from where it is. Where the free cursor
         // itself shows the point (`mouse_hold` off) it goes back there, so the two agree.
-        if self.input.mouse_drive && self.menus.game_menu.is_none() && self.input.look_lock.is_none() {
+        if self.input.mouse_drive && self.menus.game_menu.is_none() && self.menus.alt_menu.is_none() && self.input.look_lock.is_none() {
             if pressed {
                 self.input.steer_cursor = Some(self.input.cursor);
             } else if let Some((x, y)) = self.input.steer_cursor.take() {

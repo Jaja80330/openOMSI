@@ -4,6 +4,7 @@
 use super::*;
 
 mod actions;
+mod alt_menu;
 mod clock;
 mod coupling;
 mod depot;

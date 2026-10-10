@@ -145,7 +145,7 @@ impl App {
     /// the background).
     pub(crate) fn mouse_steering_now(&self) -> bool {
         self.input.mouse_drive && self.mouse_steers_in_view() && !self.input.mouse_look && !self.input.input_away
-            && !self.plugin_focus() && self.menus.game_menu.is_none() && self.photo.is_none()
+            && !self.plugin_focus() && self.menus.game_menu.is_none() && self.menus.alt_menu.is_none() && self.photo.is_none()
     }
 
     /// Looking round with a mouse button held (the right, the middle, a drag in the photo
@@ -207,7 +207,7 @@ impl App {
         let hidden = matches!(self.input.mouse_grab.mode, Some(GrabMode::Locked | GrabMode::Warp));
         // (looking round with the cursor locked the wheel stays where the cross shows it)
         let looking = self.input.look_lock == Some(false) && self.input.mouse_drive && self.mouse_steers_in_view()
-            && self.menus.game_menu.is_none() && self.photo.is_none();
+            && self.menus.game_menu.is_none() && self.menus.alt_menu.is_none() && self.photo.is_none();
         if !hidden || !(self.mouse_steering_now() || looking) {
             return None;
         }

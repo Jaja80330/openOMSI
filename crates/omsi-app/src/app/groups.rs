@@ -209,6 +209,8 @@ pub(crate) struct InputState {
     /// work nothing until it has the focus again (`App::input_lost` / `input_back`).
     pub(crate) input_away: bool,
     pub(crate) keys: hashbrown::HashSet<KeyCode>,
+    /// Alt is held and no other key came since it was pressed (see `App::alt_tap_key`).
+    pub(crate) alt_tap: bool,
     /// Door trigger groups currently held by the Shift+number shortcut. Keeping the
     /// release until physical key-up prevents latched button states and door chatter.
     pub(crate) door_key_triggers: hashbrown::HashMap<KeyCode, Vec<String>>,
@@ -361,6 +363,8 @@ pub(crate) struct MenuState {
     /// The keyboard chose the line of the menu last (the mouse moved since: false), so the
     /// chosen line is shown lit; with the mouse only the line under it is.
     pub(crate) menu_kbd: bool,
+    /// The quick menu (OMSI 2's Alt menu) is open, its tile the keyboard is on.
+    pub(crate) alt_menu: Option<usize>,
     /// The next click on the city map puts the bus there (Esc → Move the bus on the map).
     pub(crate) teleport_pick: bool,
     /// The tutorial being run (`--tutorial`), loaded on the first frame.

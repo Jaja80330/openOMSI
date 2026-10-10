@@ -29,6 +29,11 @@ pub(crate) const SCENERY_OBJECT_REACH: f32 = 50.0;
 impl App {
     /// A key of the window, or of an `OMSI_INPUT` script.
     pub(crate) fn on_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode, pressed: bool, repeat: bool) {
+        // the quick menu (Alt alone): its keys while it is open
+        self.alt_tap_key(code, pressed, repeat);
+        if pressed && self.alt_menu_key(code, pressed) {
+            return;
+        }
         // the server's welcome: Enter or Escape plays, the arrows and the page keys scroll it
         if self.welcome.is_some() {
             let (max, page) = self.ui.as_ref().map(|u| (u.welcome_max, u.welcome_view)).unwrap_or((0.0, 300.0));

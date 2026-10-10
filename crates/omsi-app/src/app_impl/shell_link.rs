@@ -33,7 +33,7 @@ impl App {
     /// The screens of the launcher's toolkit take the mouse: the pause menu is open (not in
     /// a headset, whose menu is a card in the scene), or the photo mode is on.
     pub(crate) fn shell_takes_mouse(&self) -> bool {
-        (!self.vr_active() && self.menus.game_menu.is_some()) || self.photo.is_some()
+        (!self.vr_active() && (self.menus.game_menu.is_some() || self.menus.alt_menu.is_some())) || self.photo.is_some()
     }
 
     /// The pause menu drawn with the launcher's toolkit, over the picture (nothing when it is
@@ -56,6 +56,15 @@ impl App {
         let (w, h) = (s.config.width as f32, s.config.height as f32);
         let dpi = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
         let scale = dpi * ui::size_factor(h, dpi, self.settings.ui_scale, self.settings.ui_scale_window);
+        // the quick menu, while the game menu is closed
+        if self.menus.game_menu.is_none() {
+            if let Some(view) = self.alt_view() {
+                self.shell.begin(w, h, scale, dt);
+                crate::shell::alt_menu::draw(&mut self.shell, &view);
+                self.shell.finish();
+            }
+            return;
+        }
         let rail = self.game_menu_items();
         let tabs = match self.menus.list_kind.as_ref() {
             Some(k) if self.menus.chooser.is_some() => crate::game_lists::page_titles(self, k),
@@ -134,6 +143,7 @@ impl App {
                 Action::Dropdown(i) => self.dropdown_pick(i),
                 Action::CloseDropdown => self.menus.dropdown = None,
                 Action::Photo(r) => self.photo_request(r),
+                Action::Alt(k) => self.alt_do(k),
             }
         }
     }

@@ -633,6 +633,7 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
             metar_next: 0.0,
         },
         menus: MenuState {
+            alt_menu: None,
             chooser: None,
             editor: None,
             vehicle_list: Vec::new(),
@@ -724,6 +725,7 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
         started,
         view,
         input: InputState {
+            alt_tap: false,
             cursor: (0.0, 0.0),
             window_focused: false,
             input_away: false,

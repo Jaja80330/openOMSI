@@ -46,6 +46,7 @@ impl App {
         let vr_on = false;
         let needs_mouse = self.input.mouse_drive
             || self.menus.game_menu.is_some()
+            || self.menus.alt_menu.is_some()
             || self.menus.chooser.is_some()
             || self.menus.list_kind.is_some()
             || self.menus.navigator.as_ref().is_some_and(|n| n.map_open())
