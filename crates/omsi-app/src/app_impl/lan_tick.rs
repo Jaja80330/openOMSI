@@ -58,6 +58,7 @@ impl App {
         self.tick_radio();
         self.tick_self_duty(dt);
         self.tick_rules(dt);
+        self.tick_bus_ask(dt);
         // the server's welcome, once the world and the bus are there
         if self.welcome.is_none() && self.world.is_some() && self.player.is_some() {
             if let Some((text, pictures)) = crate::welcome::take() {
@@ -83,6 +84,10 @@ impl App {
 
     /// A command another player's game sent ours (`LanSession::command`).
     pub(crate) fn lan_command(&mut self, from: u32, text: &str) {
+        // a bus nobody drives, asked for and given up (`take-bus`, see `bus_handover`)
+        if self.bus_handover_command(from, text) {
+            return;
+        }
         let Some(lan) = self.net.lan.as_ref() else { return };
         let my_id = lan.my_id;
         if let Some(ev) = text.strip_prefix("trigger ") {

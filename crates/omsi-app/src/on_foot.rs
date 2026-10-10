@@ -647,6 +647,16 @@ impl App {
         // inside a bus: the wheel of the own bus by the driver's place, else the free seat
         // nearest by
         if let Some((bus, _)) = f.inside {
+            // another player's bus, by its driver's place: its wheel, when nobody is at it
+            let remote = match bus {
+                BusId::Ai(id) => crate::humans::remote_bus_player(id),
+                _ => None,
+            };
+            if let Some(owner) = remote.filter(|_| self.net.lan.is_some()) {
+                if self.remote_cab_near(pos, Some(owner)) == Some(owner) && self.ask_for_bus(owner) {
+                    return;
+                }
+            }
             if bus == BusId::Player {
                 let stand = self.player.as_ref().and_then(|p| self.session.humans.as_mut().and_then(|h| h.driver_stand(&p.vehicle).and_then(|l| h.vehicle_cabin_world(&p.vehicle, l))));
                 if stand.map(|s| (s - pos).truncate().length() < 2.5).unwrap_or(true) {
@@ -668,6 +678,14 @@ impl App {
                 None => self.service_msg = Some(("No free seat near: walk up to one".into(), 3.0)),
             }
             return;
+        }
+        // by the driver's door of another player's bus nobody drives: its wheel
+        if self.net.lan.is_some() {
+            if let Some(owner) = self.remote_cab_near(pos, None) {
+                if self.ask_for_bus(owner) {
+                    return;
+                }
+            }
         }
         // at the cab of a vehicle one placed (or with no bus of one's own): its wheel
         if let Some(k) = self.placed_cab_near(pos) {

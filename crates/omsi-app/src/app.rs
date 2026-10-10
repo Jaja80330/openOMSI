@@ -59,6 +59,8 @@ pub(crate) struct App {
     pub(crate) server_foot_only: Option<bool>,
     /// Seconds before the server is asked its rules again.
     pub(crate) rules_ask: f32,
+    /// Another player's bus nobody drives, asked for (see `bus_handover`).
+    pub(crate) bus_ask: Option<crate::bus_handover::BusAsk>,
     /// The server's welcome, shown over the game until its Play button (`welcome`); the
     /// messages' window is shown in its place.
     pub(crate) welcome: Option<crate::welcome::Welcome>,

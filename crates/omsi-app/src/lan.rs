@@ -522,6 +522,16 @@ impl RemoteVehicle {
         &self.vehicle
     }
 
+    /// Its depot file's name (the one its displays are set from).
+    pub(crate) fn hof_name(&self) -> Option<String> {
+        self.hof.as_ref().and_then(|h| h.path.file_name()).map(|n| n.to_string_lossy().into_owned())
+    }
+
+    /// Every variable of theirs comes (the same vehicle files): the copy's state is theirs.
+    pub(crate) fn all_vars(&self) -> bool {
+        self.vars.is_some()
+    }
+
     /// The same, for the plugins (`omsi.set_other_var`: their next state writes it again).
     pub fn vehicle_mut(&mut self) -> &mut omsi_sim::VehicleInstance {
         &mut self.vehicle
@@ -2520,7 +2530,7 @@ pub fn settle_spawn(
 /// it must be a plain relative `.bus` / `.ovh` path (`omsi_net::vehicle_path`), found under
 /// one of our content roots, and a regular file of a sane size - never a device such as
 /// `/dev/zero`, never a file elsewhere on the disk.
-fn remote_bus_file(args: &Args, bus: &str) -> Result<PathBuf, String> {
+pub(crate) fn remote_bus_file(args: &Args, bus: &str) -> Result<PathBuf, String> {
     let rel = omsi_net::vehicle_path(bus)
         .ok_or_else(|| "not a vehicle file inside a content folder".to_string())?;
     let mut path = omsi_cfg::resolve_path(&args.root, &rel);

@@ -126,6 +126,7 @@ impl App {
                     replace: self.player.as_ref().filter(|_| swap).map(|p| p.uid),
                     reload: false,
                     heading,
+                    takeover: None,
                 });
                 self.service_msg = Some(("Loading vehicle...".into(), 4.0));
             }
@@ -168,6 +169,10 @@ impl App {
         let result = crate::spawn::spawn_player_prepared(&pending.args, &pending.world, r, scene, prepared);
         log::info!("vehicle placement: put into the world in {:.3} s", start.elapsed().as_secs_f64());
         match result {
+            Ok(Some(q)) if pending.takeover.is_some() => {
+                let t = pending.takeover.take().unwrap();
+                self.drive_taken_over(q, &t);
+            }
             Ok(Some(q)) if pending.replace.is_some() => {
                 let name = format!("{} {}", q.vehicle.ty.def.manufacturer, q.vehicle.ty.def.type_name);
                 self.replace_driven_vehicle(q);

@@ -10,6 +10,7 @@
 //! window of one process.
 
 mod admin;
+mod bus_handover;
 mod discord;
 #[cfg(steam)]
 mod steam;
@@ -800,6 +801,7 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
         server_spawn: None,
         server_foot_only: None,
         rules_ask: 0.0,
+        bus_ask: None,
         welcome: None,
         inbox: Vec::new(),
         inbox_unread: 0,

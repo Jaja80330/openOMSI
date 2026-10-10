@@ -32687,3 +32687,57 @@ _version: 2
 "On foot, G at an open door gets in, and G by a seat sits down.":
   fr: "À pied, G devant une porte ouverte pour monter, G près d'un siège pour s'asseoir."
   de: "Zu Fuß: G an einer offenen Tür steigt ein, G an einem Sitz setzt sich."
+
+"Somebody drives this bus: you may ride in it as a passenger":
+  fr: "Quelqu'un conduit ce bus : vous pouvez y monter comme passager"
+
+"You have a bus of your own: remove it (menu: Vehicle) to take another":
+  fr: "Vous avez déjà votre bus : supprimez-le (menu Véhicule) pour en prendre un autre"
+
+"A bus is being taken over already":
+  fr: "Une prise de volant est déjà en cours"
+
+"Taking the wheel...":
+  fr: "Prise du volant..."
+
+"The bus's driver's game did not answer":
+  fr: "Le jeu du conducteur de ce bus n'a pas répondu"
+
+"The bus could not be made here":
+  fr: "Ce bus n'a pas pu être chargé ici"
+
+"Somebody has just taken the wheel of this bus":
+  fr: "Quelqu'un vient de prendre le volant de ce bus"
+
+"This bus is no longer there":
+  fr: "Ce bus n'est plus là"
+
+"has taken the wheel of your bus: you are on foot":
+  fr: "a pris le volant de votre bus : vous êtes à pied"
+
+"You have taken the wheel":
+  fr: "Vous avez pris le volant"
+
+"Player":
+  fr: "Joueur"
+
+"This server lets you put a bus of your own into the world again":
+  fr: "Ce serveur vous permet de nouveau de faire apparaître un bus"
+
+"This server no longer lets you put a bus of your own into the world":
+  fr: "Ce serveur ne vous permet plus de faire apparaître un bus"
+
+"On this server you go on foot: take the wheel of a bus nobody drives (G at its driver's place)":
+  fr: "Sur ce serveur, on commence à pied : prenez le volant d'un bus sans conducteur (G au poste de conduite)"
+
+"This server does not let you put a bus of your own into the world":
+  fr: "Ce serveur ne permet pas de faire apparaître un bus"
+
+"This server has its players start on foot":
+  fr: "Sur ce serveur, les joueurs commencent à pied"
+
+"You start on foot. There, G at the driver's place of a bus nobody drives takes the wheel; the game menu puts a bus of your own into the world.":
+  fr: "Vous commencez à pied. Sur place, G au poste de conduite d'un bus sans conducteur permet de prendre le volant ; le menu du jeu permet de faire apparaître votre propre bus."
+
+"You start on foot. There, G at the driver's place of a bus nobody drives takes the wheel.":
+  fr: "Vous commencez à pied. Sur place, G au poste de conduite d'un bus sans conducteur permet de prendre le volant."

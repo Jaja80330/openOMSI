@@ -187,6 +187,8 @@ pub(crate) struct PendingPlacement {
     /// The driven vehicle read again from its files (the menu's reload).
     pub(crate) reload: bool,
     pub(crate) heading: f64,
+    /// Another player's bus given up to us (see `bus_handover`): driven at once, as it was.
+    pub(crate) takeover: Option<Box<crate::bus_handover::TakeOver>>,
 }
 
 /// Choose the player's fleet number and registration before the script VM runs `{init}`.
