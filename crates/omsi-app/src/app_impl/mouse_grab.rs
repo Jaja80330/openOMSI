@@ -97,6 +97,12 @@ impl MouseGrab {
         }
     }
 
+    /// The window put the cursor at (x, y) (`Plain`: held at the edge while what the mouse
+    /// turned past it is given back): its movement counts from there.
+    pub(crate) fn put_at(&mut self, x: f32, y: f32) {
+        self.last = Some((x, y));
+    }
+
     /// The mouse stopped steering: the cursor's next report starts afresh.
     pub(crate) fn pause(&mut self) {
         self.last = None;
@@ -357,6 +363,7 @@ impl App {
                 self.steer_point_moved(size)
             }
             CursorStep::Moved { warp } => {
+                self.hold_at_edge(x, y, size);
                 if warp {
                     let moved = self.window.as_ref().is_some_and(|win| win.set_cursor_position(
                         winit::dpi::PhysicalPosition::new((size.0 * 0.5) as f64, (size.1 * 0.5) as f64)).is_ok());
@@ -366,6 +373,46 @@ impl App {
                 }
                 self.steer_point_moved(size)
             }
+        }
+    }
+
+    /// The free cursor (`Plain`, the setting `mouse_hold` off) pinned at the window's left or
+    /// right edge, the mouse moving on outwards: the wheel turns further, a window's width of
+    /// movement for the whole lock at any speed, as the steering went before the cursor was
+    /// held (the mouse's raw movement: the cursor itself goes no further).
+    pub(crate) fn plain_past_edge(&mut self, dx: f32) {
+        if self.input.mouse_grab.mode != Some(GrabMode::Plain) || !self.mouse_steering_now() {
+            return;
+        }
+        let Some(size) = self.window_size() else { return };
+        let x = self.input.cursor.0;
+        let (at_left, at_right) = (x <= 2.0, x >= size.0 - 3.0);
+        if (at_right && dx > 0.0) || (at_left && dx < 0.0) {
+            let reach = steer_reach(self.input.mouse_kmh, self.settings.mouse_sens);
+            let from = self.input.cursor;
+            self.input.mouse_grab.add(from, dx * reach, 0.0);
+            self.steer_point_moved(size);
+        }
+    }
+
+    /// The free cursor coming back from the edge while the steering point still lies past
+    /// it: the movement gives that back first, the cursor held at the edge until it is used
+    /// up - the wheel never jumps.
+    fn hold_at_edge(&mut self, x: f32, y: f32, size: (f32, f32)) {
+        if self.input.mouse_grab.mode != Some(GrabMode::Plain) {
+            return;
+        }
+        let Some((ax, _)) = self.input.mouse_grab.at else { return };
+        let edge = if ax > size.0 - 1.0 && x < size.0 - 3.0 {
+            size.0 - 2.0
+        } else if ax < 0.0 && x > 2.0 {
+            1.0
+        } else {
+            return;
+        };
+        let moved = self.window.as_ref().is_some_and(|win| win.set_cursor_position(winit::dpi::PhysicalPosition::new(edge as f64, y as f64)).is_ok());
+        if moved {
+            self.input.mouse_grab.put_at(edge, y);
         }
     }
 

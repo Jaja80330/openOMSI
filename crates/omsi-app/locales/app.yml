@@ -32741,3 +32741,6 @@ _version: 2
 
 "You start on foot. There, G at the driver's place of a bus nobody drives takes the wheel.":
   fr: "Vous commencez à pied. Sur place, G au poste de conduite d'un bus sans conducteur permet de prendre le volant."
+
+"On: the cursor is hidden and held, the mouse's own movement steers. Off (as before): the crosshair stays free, and pushed on at the window's edge it turns the wheel further":
+  fr: "Activé : le curseur est caché et retenu, le mouvement de la souris dirige. Désactivé (comme avant) : le curseur reste libre, et poussé au bord de la fenêtre il continue de tourner le volant"

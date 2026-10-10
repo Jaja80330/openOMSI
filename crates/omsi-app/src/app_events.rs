@@ -385,6 +385,10 @@ impl ApplicationHandler for App {
                 // (the locked cursor's raw movement, in points on macOS: window pixels)
                 let s = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
                 self.steer_by(delta.0 as f32 * s, delta.1 as f32 * s);
+            } else if self.input.mouse_grab.mode == Some(crate::app_impl::GrabMode::Plain) {
+                // (the free cursor at the window's edge: the mouse moving on turns further)
+                let s = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+                self.plain_past_edge(delta.0 as f32 * s);
             }
         }
     }
