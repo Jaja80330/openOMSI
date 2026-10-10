@@ -707,9 +707,10 @@ impl App {
         false
     }
 
-    /// What the loading screen shows now: `status` and the progress, the map, the bus, the
-    /// server joined.
+    /// What the loading screen shows now: the map and how far the loading got. (`status`,
+    /// what is being done, goes to the log only: the screen keeps one quiet line.)
     pub(crate) fn load_screen(&self, status: String, progress: f32) -> crate::ui::LoadScreen {
+        log::debug!("loading: {status} ({:.0} %)", progress * 100.0);
         let map = self
             .world
             .as_ref()
@@ -720,18 +721,7 @@ impl App {
                 let p = self.args.map.replace('\\', "/");
                 p.trim_end_matches("/global.cfg").rsplit('/').next().unwrap_or("").replace('_', " ")
             });
-        let bus = self.args.bus.as_deref().map(|b| b.replace('\\', "/")).and_then(|b| b.rsplit('/').next().map(|f| f.trim_end_matches(".bus").replace('_', " "))).unwrap_or_default();
-        let mut sub = bus;
-        if let (Some(line), Some(tour)) = (self.args.line.as_deref(), self.args.tour.as_deref()) {
-            sub.push_str(&format!(" · {} {line} / {tour}", omsi_ui::tr("Line")));
-        }
-        let server = self.net.lan.as_ref().filter(|l| l.role == omsi_net::Role::Client).map(|l| {
-            let name = l.welcome.as_ref().map(|w| w.host_name.clone()).filter(|n| !n.trim().is_empty()).or_else(|| self.args.lan_join.clone()).unwrap_or_default();
-            format!("{} {name}", omsi_ui::tr("Server:"))
-        });
-        let tips = &crate::launcher::title::TIPS;
-        let tip = omsi_ui::tr(tips[(map.len() + self.args.time.len()) % tips.len()]).into_owned();
-        crate::ui::LoadScreen { status, title: map.trim().to_string(), sub, server, progress, tip }
+        crate::ui::LoadScreen { title: map.trim().to_string(), progress }
     }
 
     /// One picture of the loading screen while a step holds the window (the map read, the bus
@@ -747,8 +737,7 @@ impl App {
     /// One picture of the loading screen with `title` (the one window: the session being
     /// written and the world let go, which holds the window for a moment).
     pub(crate) fn still_frame(&mut self, title: &str) {
-        let mut screen = self.load_screen(title.to_string(), 1.0);
-        screen.server = None;
+        let screen = self.load_screen(title.to_string(), 1.0);
         self.draw_load_screen(&screen);
     }
 

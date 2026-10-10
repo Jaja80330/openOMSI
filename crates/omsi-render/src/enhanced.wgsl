@@ -780,7 +780,13 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
         // and rises towards grazing as a real coat does. (A plain 4 % coat left those
         // bodies far fainter than in the vanilla picture.) A body with neither keeps the
         // lacquer's 4 %: there Omsi.exe's lerp by the factor alone made every Golf a mirror.
-        let authored = masked || material.params.z > 0.5;
+        // A factor under 1 is a share the modeller chose as well - a window frame, the
+        // destination display's black housing, a panel beside a pane of the same factor -
+        // and Omsi.exe lays the sphere map over it by that share as it does over the pane:
+        // taken as plain lacquer (4 %), the black frame stood dull beside a pane that
+        // mirrored the street. (The legacy "1" or "10" of a car body still reads as lacquer.)
+        let fractional = material.params2.y < 0.999;
+        let authored = masked || material.params.z > 0.5 || fractional;
         let coat = select(0.04, clamp((refl - 1.0 / 21.0) * 21.0 / 20.0, 0.04, 0.95), authored);
         f0 = mix(vec3<f32>(coat), mix(albedo, vec3<f32>(1.0), 0.4) * refl, metal);
         rough = mix(coat_rough, 0.14, metal);
