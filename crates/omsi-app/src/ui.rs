@@ -591,6 +591,29 @@ pub struct LoadScreen {
     pub title: String,
     /// 0..1.
     pub progress: f32,
+    /// A tip (see `load_tip`).
+    pub tip: String,
+}
+
+/// What the loading screens tell while they wait.
+pub(crate) const LOAD_TIPS: [&str; 9] = [
+    "Escape opens the game menu: options, the city map, the line and tour, the main menu.",
+    "Alt alone opens the quick menu: another bus, the timetable, the destination display.",
+    "Kneel the bus at the stops: passengers with prams and wheelchairs get on more easily.",
+    "Keep to the timetable: the profile counts how early or late you were at every stop.",
+    "The city map shows where you are and the stops of your line.",
+    "Settings -> Driving: an automatic clutch and gearbox for a first drive.",
+    "In multiplayer, the code of your session lets friends join your game.",
+    "On a server, G at the driver's place of a bus nobody drives takes the wheel.",
+    "On foot, G at an open door gets in, and G by a seat sits down.",
+];
+
+/// The tip of this start, translated: one for the whole run of the program (the launcher's
+/// loading screen and the game's tell the same).
+pub(crate) fn load_tip() -> String {
+    static PICK: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let k = *PICK.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as usize).unwrap_or(0) % LOAD_TIPS.len());
+    omsi_ui::tr(LOAD_TIPS[k]).into_owned()
 }
 
 /// Between the information bar's parts.
@@ -1299,22 +1322,39 @@ impl TextCache {
 }
 
 impl Ui {
-    /// The loading screen: black, with one quiet line in the middle - what is loaded and how
-    /// far it got. The game itself shows only once it is there. (A picture of the launcher's
-    /// kind - the map large, the bus, a running bar, a tip - was too much over a black
-    /// window, and on three screens it stretched into a band.)
+    /// The loading screen: black - nothing of the map shows until it is there - and in the
+    /// middle the map's name, a thin bar of how far the loading got with its percentage, and
+    /// a tip under it, all of it small and centred (on three screens: on the middle one).
     pub fn loading(&mut self, r: &Renderer, scene: &mut Scene, width: f32, height: f32, scale: f32, l: &LoadScreen) {
         let s = scale.max(0.5);
-        // (the percentage never goes back: the steps report their own shares)
+        // (the bar never goes back: the steps report their own shares)
         self.load_shown = self.load_shown.max(l.progress.clamp(0.0, 1.0));
         self.load_last = None;
         let black = self.text.solid(r, scene, [0, 0, 0, 255]);
         scene.overlays.push((black, [0.0, 0.0, width, height]));
-        let what = if l.title.trim().is_empty() { omsi_ui::tr("Loading").into_owned() } else { format!("{} {}", omsi_ui::tr("Loading"), l.title.trim()) };
-        let line = format!("{what} - {} %", (self.load_shown * 100.0).round() as u32);
-        let lb = self.text.label(r, scene, &line, (15.0 * s) as u32, [170, 170, 174, 0]);
-        let (x, y) = ((width - lb.w as f32) * 0.5, (height - lb.h as f32) * 0.5);
-        scene.overlays.push((lb.tex, [x, y, x + lb.w as f32, y + lb.h as f32]));
+        let (cx, cy) = (width * 0.5, height * 0.5);
+        let centred = |ui: &mut Ui, scene: &mut Scene, text: &str, px: f32, bold: bool, rgb: [u8; 3], y: f32| {
+            let lb = ui.text.label(r, scene, text, (px * s) as u32 | if bold { BOLD } else { 0 }, [rgb[0], rgb[1], rgb[2], 0]);
+            let x = (cx - lb.w as f32 * 0.5).round();
+            scene.overlays.push((lb.tex, [x, y, x + lb.w as f32, y + lb.h as f32]));
+        };
+        let title = if l.title.trim().is_empty() { omsi_ui::tr("Loading").into_owned() } else { l.title.trim().to_string() };
+        centred(self, scene, &title, 20.0, true, [230, 230, 232], cy - 46.0 * s);
+        // the bar
+        let bw = (360.0 * s).min(width * 0.6);
+        let bh = (3.0 * s).max(2.0).round();
+        let (bx, by) = ((cx - bw * 0.5).round(), (cy - bh * 0.5).round());
+        let track = self.text.solid(r, scene, [44, 45, 48, 255]);
+        scene.overlays.push((track, [bx, by, bx + bw, by + bh]));
+        let done = (bw * self.load_shown).round();
+        if done >= 1.0 {
+            let fill = self.text.solid(r, scene, [232, 160, 48, 255]);
+            scene.overlays.push((fill, [bx, by, bx + done, by + bh]));
+        }
+        centred(self, scene, &format!("{} %", (self.load_shown * 100.0).round() as u32), 12.0, false, [150, 150, 154], cy + 12.0 * s);
+        if !l.tip.is_empty() {
+            centred(self, scene, &l.tip, 13.0, false, [120, 120, 124], cy + 52.0 * s);
+        }
         self.text.end_frame(r, scene);
     }
 

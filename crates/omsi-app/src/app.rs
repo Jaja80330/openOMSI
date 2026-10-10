@@ -721,7 +721,7 @@ impl App {
                 let p = self.args.map.replace('\\', "/");
                 p.trim_end_matches("/global.cfg").rsplit('/').next().unwrap_or("").replace('_', " ")
             });
-        crate::ui::LoadScreen { title: map.trim().to_string(), progress }
+        crate::ui::LoadScreen { title: map.trim().to_string(), progress, tip: crate::ui::load_tip() }
     }
 
     /// One picture of the loading screen while a step holds the window (the map read, the bus

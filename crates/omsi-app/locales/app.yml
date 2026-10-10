@@ -32671,3 +32671,19 @@ _version: 2
 "Route helpers hidden":
   fr: "Aides à l'itinéraire masquées"
   de: "Routenhilfen aus"
+
+"Alt alone opens the quick menu: another bus, the timetable, the destination display.":
+  fr: "Alt seul ouvre le menu rapide : un autre bus, le service, la girouette."
+  de: "Alt allein öffnet das Schnellmenü: ein anderer Bus, der Fahrplan, die Zielanzeige."
+
+"Settings -> Driving: an automatic clutch and gearbox for a first drive.":
+  fr: "Réglages -> Conduite : embrayage et boîte automatiques pour une première conduite."
+  de: "Einstellungen -> Fahren: automatische Kupplung und Schaltung für die erste Fahrt."
+
+"On a server, G at the driver's place of a bus nobody drives takes the wheel.":
+  fr: "Sur un serveur, G au poste de conduite d'un bus sans conducteur permet de prendre le volant."
+  de: "Auf einem Server übernimmt G am Fahrerplatz eines Busses ohne Fahrer das Steuer."
+
+"On foot, G at an open door gets in, and G by a seat sits down.":
+  fr: "À pied, G devant une porte ouverte pour monter, G près d'un siège pour s'asseoir."
+  de: "Zu Fuß: G an einer offenen Tür steigt ein, G an einem Sitz setzt sich."
