@@ -109,9 +109,11 @@ pub use wire::{
 pub const PROTOCOL: u32 = 6;
 /// What this game can do beyond the protocol, said in its `HELLO` (comma-separated): a
 /// server may let in only games that can (`LanSession::require`) - `radio`: the dispatch
-/// radio (`dispatch`), `ttdata`: plays with the server's timetable (`ttdata`). A host that
+/// radio (`dispatch`), `ttdata`: plays with the server's timetable (`ttdata`), `rules`: keeps
+/// to the server's rules for the players' own buses (`rules spawn=… foot-only=…`),
+/// `takebus`: drives a bus nobody drives handed over by its player (`take-bus`). A host that
 /// knows nothing of it reads past it.
-pub const FEATURES: &str = "radio,ttdata";
+pub const FEATURES: &str = "radio,ttdata,rules,takebus";
 /// (omsi-plugin's `MULTIPLAYER_PORTS` keeps `omsi.send` off this one and the `PORT_RANGE` after it.)
 pub const DEFAULT_PORT: u16 = 27015;
 /// Ports a host tries after the default one when that is taken (a second session on the
