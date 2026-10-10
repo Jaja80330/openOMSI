@@ -645,60 +645,13 @@ impl App {
             })
             .unwrap_or_default();
         let _ = name;
-        let mut reconfigure = false;
         let screen = self.load_screen(format!("{} · {done} / {total}", omsi_ui::tr("Loading the surroundings")), LOAD_TILES.0 + (LOAD_TILES.1 - LOAD_TILES.0) * done as f32 / total.max(1) as f32);
-        if let (Some(ui), Some(s), Some(win)) = (
-            self.ui.as_mut(),
-            self.gfx.surface.as_ref(),
-            self.window.as_ref(),
-        ) {
-            scene.overlays.clear();
-            let dpi = win.scale_factor() as f32;
-            let scale = dpi * crate::ui::size_factor(s.config.height as f32, dpi, self.settings.ui_scale, self.settings.ui_scale_window);
-            ui.loading(&renderer, &mut scene, s.config.width as f32, s.config.height as f32, scale, &screen);
-            let acquired = s.acquire();
-            // a swapchain that no longer fits the window (Vulkan says so after the switch
-            // to full screen, without a resize event) is made again, as the game's own
-            // frames do: left as it was, every later frame of the loading screen failed
-            // the same way and its picture stood still until the map was there (#776)
-            reconfigure = matches!(acquired, wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost);
-            if let wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) = acquired
-            {
-                let view = s.view(&renderer.device, &frame);
-                // the tiles loaded so far stay out of the picture: the camera looks at nothing
-                let blank = Camera {
-                    position: DVec3::new(0.0, 0.0, -1.0e6),
-                    yaw: 0.0,
-                    pitch: -89.0,
-                    roll: 0.0,
-                    fov_deg: 60.0,
-                    near: 0.5,
-                    far: 10.0,
-                };
-                let lighting = omsi_render::Lighting {
-                    sky_color: glam::Vec3::new(0.08, 0.10, 0.14),
-                    ..Default::default()
-                };
-                let mut renderer = renderer;
-                renderer.render(
-                    &mut scene,
-                    &view,
-                    s.config.width,
-                    s.config.height,
-                    &blank,
-                    &lighting,
-                );
-                win.pre_present_notify();
-                s.present(&renderer.device, &renderer.queue, frame);
-                self.renderer = Some(renderer);
-            } else {
-                self.renderer = Some(renderer);
-            }
+        // (the tiles loaded so far stay out of the picture: nothing of the scene is drawn)
+        let reconfigure = self.present_load_screen(&renderer, &screen);
+        if let Some(win) = self.window.as_ref() {
             win.request_redraw();
-        } else {
-            self.renderer = Some(renderer);
         }
+        self.renderer = Some(renderer);
         if reconfigure {
             if let (Some(s), Some(r), Some(win)) = (self.gfx.surface.as_mut(), self.renderer.as_ref(), self.window.as_ref()) {
                 let size = win.inner_size();
@@ -737,9 +690,6 @@ impl App {
     /// placed): what is done, the bar where it is.
     pub(crate) fn load_frame(&mut self, status: &str, progress: f32) {
         let screen = self.load_screen(status.to_string(), progress);
-        if let Some(ui) = self.ui.as_mut() {
-            ui.load_jump(progress);
-        }
         self.draw_load_screen(&screen);
     }
 
@@ -751,25 +701,47 @@ impl App {
     }
 
     fn draw_load_screen(&mut self, screen: &crate::ui::LoadScreen) {
-        let (Some(renderer), Some(mut scene)) = (self.renderer.take(), self.scene.take()) else { return };
-        let mut renderer = renderer;
-        if let (Some(ui), Some(s), Some(win)) = (self.ui.as_mut(), self.gfx.surface.as_ref(), self.window.as_ref()) {
-            scene.overlays.clear();
-            let dpi = win.scale_factor() as f32;
-            let scale = dpi * crate::ui::size_factor(s.config.height as f32, dpi, self.settings.ui_scale, self.settings.ui_scale_window);
-            ui.loading(&renderer, &mut scene, s.config.width as f32, s.config.height as f32, scale, screen);
-            if let wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) = s.surface.get_current_texture() {
-                let view = frame.texture.create_view(&Default::default());
-                let blank = Camera { position: DVec3::new(0.0, 0.0, -1.0e6), yaw: 0.0, pitch: -89.0, roll: 0.0, fov_deg: 60.0, near: 0.5, far: 10.0 };
-                let lighting = omsi_render::Lighting { sky_color: glam::Vec3::new(0.08, 0.10, 0.14), ..Default::default() };
-                renderer.render(&mut scene, &view, s.config.width, s.config.height, &blank, &lighting);
-                win.pre_present_notify();
-                frame.present();
+        let Some(renderer) = self.renderer.take() else { return };
+        let reconfigure = self.present_load_screen(&renderer, screen);
+        if reconfigure {
+            if let (Some(s), Some(win)) = (self.gfx.surface.as_mut(), self.window.as_ref()) {
+                let size = win.inner_size();
+                s.resize(&renderer, size.width, size.height);
             }
-            scene.overlays.clear();
         }
         self.renderer = Some(renderer);
-        self.scene = Some(scene);
+    }
+
+    /// One picture of the loading screen on the window (`shell::loading`): black, the name,
+    /// the bar and the tip, with the launcher's toolkit and its own textures - nothing of the
+    /// scene, whose texture slots the map being loaded fills and reuses meanwhile (the sky
+    /// showed through the screen, its texts as pieces of other pictures). True when the
+    /// swapchain no longer fits the window and is to be made again (Vulkan says so after the
+    /// switch to full screen, without a resize event: left as it was, every later frame of
+    /// the loading screen failed the same way, #776).
+    fn present_load_screen(&mut self, renderer: &Renderer, screen: &crate::ui::LoadScreen) -> bool {
+        let (Some(s), Some(win)) = (self.gfx.surface.as_ref(), self.window.as_ref()) else { return false };
+        let (w, h) = (s.config.width, s.config.height);
+        let dpi = win.scale_factor() as f32;
+        let scale = dpi * crate::ui::size_factor(h as f32, dpi, self.settings.ui_scale, self.settings.ui_scale_window);
+        // (the bar never goes back within a load; a new one starts from its beginning)
+        let p = screen.progress.clamp(0.0, 1.0);
+        self.cam.load_shown = if p < 0.05 { p } else { self.cam.load_shown.max(p) };
+        self.shell.begin(w as f32, h as f32, scale, 1.0 / 30.0);
+        crate::shell::loading::draw(&mut self.shell.ui, &screen.title, Some(self.cam.load_shown), &screen.tip);
+        self.shell.finish();
+        let acquired = s.acquire();
+        let reconfigure = matches!(acquired, wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost);
+        if let wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) = acquired {
+            let view = s.view(&renderer.device, &frame);
+            let opaque = std::mem::replace(&mut self.shell.opaque, true);
+            self.shell.render(renderer, &view, w, h);
+            self.shell.opaque = opaque;
+            win.pre_present_notify();
+            s.present(&renderer.device, &renderer.queue, frame);
+        }
+        self.shell.clear();
+        reconfigure
     }
 
     /// Stream the tiles around the camera and the player's bus (whose ground must stay when

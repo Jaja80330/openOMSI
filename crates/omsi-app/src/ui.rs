@@ -580,12 +580,9 @@ pub struct Ui {
     pub welcome_view: f32,
     /// The welcome's pictures on the GPU, by their `src` and pixels.
     welcome_tex: hashbrown::HashMap<(String, usize), TextureId>,
-    /// The loading screen's bar as shown (it eases to the progress), and when it was drawn.
-    load_shown: f32,
-    load_last: Option<std::time::Instant>,
 }
 
-/// What the loading screen says (`Ui::loading`).
+/// What the loading screen says (`shell::loading`).
 pub struct LoadScreen {
     /// The map.
     pub title: String,
@@ -693,7 +690,7 @@ impl Ui {
         self.chat.rect[2] += x;
     }
     pub fn new() -> Option<Ui> {
-        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, welcome_button_hovered: false, welcome_cancel_hovered: false, duty_button_hovered: false, inbox_button_hovered: false, timetable_button_hovered: false, sae_button_hovered: false, emergency_hovered: false, welcome_track: None, welcome_max: 0.0, welcome_view: 0.0, welcome_tex: Default::default(), load_shown: 0.0, load_last: None })
+        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false, welcome_button_hovered: false, welcome_cancel_hovered: false, duty_button_hovered: false, inbox_button_hovered: false, timetable_button_hovered: false, sae_button_hovered: false, emergency_hovered: false, welcome_track: None, welcome_max: 0.0, welcome_view: 0.0, welcome_tex: Default::default() })
     }
 
     /// Draw the frame's interface: its overlays go after the HUD's in `scene.overlays`.
@@ -1318,51 +1315,6 @@ impl TextCache {
         scene.overlays.push((tr, [x1 - rad, y0, x1, y0 + rad]));
         scene.overlays.push((bl, [x0, y1 - rad, x0 + rad, y1]));
         scene.overlays.push((br, [x1 - rad, y1 - rad, x1, y1]));
-    }
-}
-
-impl Ui {
-    /// The loading screen: black - nothing of the map shows until it is there - and in the
-    /// middle the map's name, a thin bar of how far the loading got with its percentage, and
-    /// a tip under it, all of it small and centred (on three screens: on the middle one).
-    pub fn loading(&mut self, r: &Renderer, scene: &mut Scene, width: f32, height: f32, scale: f32, l: &LoadScreen) {
-        let s = scale.max(0.5);
-        // (the bar never goes back: the steps report their own shares)
-        self.load_shown = self.load_shown.max(l.progress.clamp(0.0, 1.0));
-        self.load_last = None;
-        let black = self.text.solid(r, scene, [0, 0, 0, 255]);
-        scene.overlays.push((black, [0.0, 0.0, width, height]));
-        let (cx, cy) = (width * 0.5, height * 0.5);
-        let centred = |ui: &mut Ui, scene: &mut Scene, text: &str, px: f32, bold: bool, rgb: [u8; 3], y: f32| {
-            let lb = ui.text.label(r, scene, text, (px * s) as u32 | if bold { BOLD } else { 0 }, [rgb[0], rgb[1], rgb[2], 0]);
-            let x = (cx - lb.w as f32 * 0.5).round();
-            scene.overlays.push((lb.tex, [x, y, x + lb.w as f32, y + lb.h as f32]));
-        };
-        let title = if l.title.trim().is_empty() { omsi_ui::tr("Loading").into_owned() } else { l.title.trim().to_string() };
-        centred(self, scene, &title, 20.0, true, [230, 230, 232], cy - 46.0 * s);
-        // the bar
-        let bw = (360.0 * s).min(width * 0.6);
-        let bh = (3.0 * s).max(2.0).round();
-        let (bx, by) = ((cx - bw * 0.5).round(), (cy - bh * 0.5).round());
-        let track = self.text.solid(r, scene, [44, 45, 48, 255]);
-        scene.overlays.push((track, [bx, by, bx + bw, by + bh]));
-        let done = (bw * self.load_shown).round();
-        if done >= 1.0 {
-            let fill = self.text.solid(r, scene, [232, 160, 48, 255]);
-            scene.overlays.push((fill, [bx, by, bx + done, by + bh]));
-        }
-        centred(self, scene, &format!("{} %", (self.load_shown * 100.0).round() as u32), 12.0, false, [150, 150, 154], cy + 12.0 * s);
-        if !l.tip.is_empty() {
-            centred(self, scene, &l.tip, 13.0, false, [120, 120, 124], cy + 52.0 * s);
-        }
-        self.text.end_frame(r, scene);
-    }
-
-    /// The loading bar straight to `progress` (a step that holds the window has one picture:
-    /// no easing to see there).
-    pub fn load_jump(&mut self, progress: f32) {
-        self.load_shown = self.load_shown.max(progress.clamp(0.0, 1.0));
-        self.load_last = None;
     }
 }
 

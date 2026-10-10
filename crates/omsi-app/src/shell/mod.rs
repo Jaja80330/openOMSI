@@ -17,6 +17,7 @@ use omsi_ui::{Draw, Gpu, Layer, Vertex};
 use crate::launcher::ui::Ui;
 
 pub(crate) mod alt_menu;
+pub(crate) mod loading;
 pub(crate) mod pause;
 
 /// What a click on one of the screens asks of the game.

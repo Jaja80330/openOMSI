@@ -678,6 +678,7 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
         },
         world: None,
         cam: ViewState {
+            load_shown: 0.0,
             starting: None,
             speed: 30.0,
             f1_reset: None,

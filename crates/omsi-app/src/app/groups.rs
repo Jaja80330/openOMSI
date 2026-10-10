@@ -162,6 +162,8 @@ pub(crate) struct GfxState {
 /// switch between cameras, the outside camera's distance, the free camera's speed and the
 /// pedestrian view.
 pub(crate) struct ViewState {
+    /// How far the loading screen's bar has got (it never goes back within a load).
+    pub(crate) load_shown: f32,
     /// The map is open but the first area is still loading: the view to start with.
     pub(crate) starting: Option<Camera>,
     pub(crate) speed: f32,

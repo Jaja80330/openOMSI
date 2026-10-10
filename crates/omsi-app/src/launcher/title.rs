@@ -270,10 +270,6 @@ pub(super) fn draw_loading(l: &mut Launcher) {
     // before it reads the map - or starting the drive), a bar that runs while the drive is
     // made (the window stands still for a while then) and the tip; the game's own loading
     // screen follows with the same look and the same tip
-    let size = l.ui.size;
-    let full = Rect::new(0.0, 0.0, size.x, size.y);
-    l.ui.solid(full);
-    l.ui.p().rect(full, Color::rgba(0, 0, 0, 1.0));
     let c = &l.state.choice;
     let joining = (c.lan_mode == "join").then(|| {
         let key = l.state.joined_server.clone().unwrap_or_else(|| c.lan_addr.trim().to_string());
@@ -283,20 +279,7 @@ pub(super) fn draw_loading(l: &mut Launcher) {
         Some(server) => format!("{} {server}", omsi_ui::tr("Connecting to")),
         None => l.state.map().map(|m| if m.friendly.is_empty() { m.name.clone() } else { m.friendly.clone() }).unwrap_or_else(|| omsi_ui::tr("Starting the drive").into_owned()),
     };
-    let (cx, cy) = (size.x * 0.5, size.y * 0.5);
-    l.ui.text_in(&title, Rect::new(0.0, cy - 58.0, size.x, 26.0), 20.0, Weight::Bold, TEXT, Align::Center);
-    let bw = 360.0f32.min(size.x * 0.6);
-    let bar = Rect::new(cx - bw * 0.5, cy - 1.5, bw, 3.0);
-    l.ui.p().rect(bar, Color::rgba(44, 45, 48, 1.0));
-    let run = (l.ui.time * 0.6).fract();
-    let seg = bar.w * 0.28;
-    let sx = bar.x + (bar.w + seg) * run - seg;
-    let (a, b) = (sx.max(bar.x), (sx + seg).min(bar.right()));
-    if b > a {
-        l.ui.p().rect(Rect::new(a, bar.y, b - a, bar.h), ACCENT);
-    }
-    let tip = crate::ui::load_tip();
-    l.ui.text_in(&tip, Rect::new(0.0, cy + 40.0, size.x, 22.0), 13.0, Weight::Regular, TEXT_DIM, Align::Center);
+    crate::shell::loading::draw(&mut l.ui, &title, None, &crate::ui::load_tip());
 }
 
 // ---------------------------------------------------------------------------------------
