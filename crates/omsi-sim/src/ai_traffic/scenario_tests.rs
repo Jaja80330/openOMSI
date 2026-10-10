@@ -387,3 +387,34 @@ fn cars_still_cross_a_finite_exit_when_its_short_return_is_not_chosen() {
     }
     assert!(crossed.iter().all(|&n| n > 0), "a usable exit lost its traffic: {crossed:?}");
 }
+
+#[test]
+fn a_car_in_a_curve_does_not_stop_for_the_players_bus_going_by_in_the_other_lane() {
+    // a left bend of 40 m radius round (-40, 0): the car's lane going north into it, the
+    // oncoming lane 3.5 m inside it
+    let f = Fixture::new();
+    let centre = DVec3::new(-40.0, 0.0, 0.0);
+    let on_circle = |r: f64, a: f64| centre + DVec3::new(r * a.cos(), r * a.sin(), 0.0);
+    let arc = |r: f64, from: f64, to: f64| -> Vec<DVec3> { (0..=60).map(|k| on_circle(r, from + (to - from) * k as f64 / 60.0)).collect() };
+    let mine = LaneBuilder::polyline(arc(40.0, 0.0, 1.5), LaneKind::Street, 3.0);
+    let oncoming = LaneBuilder::polyline(arc(36.5, 1.5, 0.0), LaneKind::Street, 3.0);
+    let mut net = Network { lanes: vec![mine, oncoming], ..Default::default() };
+    net.link(1.5);
+    let mut t = traffic(&f, net);
+    let id = add_car(&mut t, &f, 0, 5.0, 0x51, Some(10.0));
+    let i = t.cars.iter().position(|c| c.id == id).unwrap();
+    // the bus further round the bend at 12 m/s, coming towards the car (heading: the way
+    // round the circle backwards, degrees clockwise from north)
+    let a = 0.8f64;
+    let heading = 180.0 - a.to_degrees();
+    let by = (on_circle(36.5, a), heading, 6.0f32, 1.25f32, 12.0f32);
+    // (where it will be in 1.5 s, straight ahead of it, does lie across the car's lane)
+    let h = heading.to_radians();
+    let (fwd, right) = (DVec2::new(h.sin(), h.cos()), DVec2::new(h.cos(), -h.sin()));
+    let crosses = (0..=60).any(|k| in_player_box(on_circle(40.0, 1.5 * k as f64 / 60.0), by.0, fwd, right, 2.6, 24.5, 6.5));
+    assert!(crosses, "the bend is not tight enough to test anything");
+    assert!(t.player_in_way(i, &by).is_none(), "a bus going by in the other lane is in the car's way");
+    // on the car's own lane, head on: in its way
+    let head_on = (on_circle(40.0, a), heading, 6.0f32, 1.25f32, 12.0f32);
+    assert!(t.player_in_way(i, &head_on).is_some());
+}

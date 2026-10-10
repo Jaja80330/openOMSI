@@ -394,11 +394,36 @@ impl TrafficSim {
         let inside = |p: DVec3| in_player_box(p, centre, fwd, right, wide, ahead + margin, behind + margin);
         let look = (st.speed * st.speed / (2.0 * st.decel) + st.speed * 2.0 + 15.0)
             .clamp(15.0, look_ahead(st.speed));
+        // An oncoming way (the car meets the bus head on where it enters the box) reaches the
+        // stretch ahead of the bus - where the bus will be - only as a straight line: in a
+        // curve the oncoming lane bends into it, and the car stopped in its own lane for a
+        // bus going by in the other. That stretch counts for it only when its way runs
+        // into the bus's body itself as well (a car on the bus's own lane, head on).
+        let body = |p: DVec3| in_player_box(p, centre, fwd, right, wide, half_len as f64 + margin, behind + margin);
+        let mut meets_body: Option<bool> = None;
         let mut d = 0.0f32;
         let mut step = 1.5f32;
         while d <= st.front + look {
             let p = st.way_point(&self.net, d.max(0.0));
-            if inside(p) {
+            let mut hit = inside(p);
+            if hit && !body(p) {
+                let here = (st.way_point(&self.net, d.max(0.0) + 1.0) - p).truncate().normalize_or_zero();
+                if here.dot(fwd) < -0.5 {
+                    let meets = *meets_body.get_or_insert_with(|| {
+                        let end = st.front + look + 2.0 * half_len + 2.0 * margin as f32;
+                        let mut e = d;
+                        while e <= end {
+                            if body(st.way_point(&self.net, e.max(0.0))) {
+                                return true;
+                            }
+                            e += 1.0;
+                        }
+                        false
+                    });
+                    hit = meets;
+                }
+            }
+            if hit {
                 // where between the samples the way enters the box: the gap to a standing bus
                 // used to come in steps of a metre and a half (and up to that much too long,
                 // so that cars stopped closer than they meant to)
