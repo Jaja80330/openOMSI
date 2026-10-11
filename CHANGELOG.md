@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 - 2026-10-11
+
+The NEROSY edition on openOMSI 0.2.27: everything of the upstream's 0.2.27 merged in, the edition's LAN, dispatch radio, duties and Big Picture kept.
+
+### From openOMSI 0.2.27
+- Ambience from real recordings, the Mods page showing what each mod holds, the photo mode, the pause menu in the launcher's style, gamepad profiles, rain and snow quality, AI traffic through junctions without lights, and the rest of 0.2.21 to 0.2.27.
+
+### Multiplayer
+- A bus nobody drives is taken over: G at the driver's place of another player's bus whose driver is out of the seat takes its wheel, the bus as it was (engine, lamps, displays); with its driver at the wheel it is got into as a passenger.
+- Server rules for the players' own buses: a server says whether its players may put a bus into the world from the menu (spawn) and whether they start on foot (foot_only); the launcher asks "Start on foot" first when joining, and offers no bus on a foot-only server.
+- The dispatcher's regulation of a duty (turns, deadhead runs, shifts, early departures) and the SAE re-sync, now in the timetable of omsi-sim.
+
+### Driving
+- The quick menu: Alt alone opens OMSI 2's grid of tiles - a new bus, another bus, the timetable, the destination display, refuel, wash, repair, route helpers, time and weather, controls, driver profile.
+- A destination text typed by hand for a matrix display (Destination display -> Type a destination text).
+- Mouse steering as before by default: the free crosshair, which pushed on at the window's edge turns the wheel further (the held cursor is a setting).
+- AI cars no longer stop in a bend for the player's bus going by in the other lane.
+
+### Picture
+- Loading screens: black with the name, a thin bar and a tip, nothing of the map until it is there.
+- Enhanced: an opaque surface with a [matl_envmap] factor under 1 reflects by that share, as a pane of the same factor does.
+
 ## 0.2.22 - 2026-10-06
 
 ### Features & Improvements
