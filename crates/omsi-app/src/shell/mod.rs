@@ -68,6 +68,11 @@ pub(crate) struct Shell {
     pub(crate) dd_anchor: Option<omsi_ui::Rect>,
     /// The screens cover the whole window (the photo mode's photo): it is cleared first.
     pub(crate) opaque: bool,
+    /// The loading screen's pictures from the edition's panel (`load_theme`) on the card,
+    /// which answer of the panel they are, and the answer to send with the next frame.
+    load_look: crate::shell::loading::Look,
+    load_look_gen: Option<u64>,
+    load_look_pending: Option<std::sync::Arc<crate::load_theme::Theme>>,
 }
 
 struct Drawn {
@@ -78,7 +83,21 @@ struct Drawn {
 
 impl Shell {
     pub(crate) fn new() -> Shell {
-        Shell { ui: Ui::new(), gpu: None, shot_gpu: None, drawn: None, actions: Vec::new(), picture: None, picture_tex: None, scale: 1.0, over_ui: false, last_sel: None, dd_anchor: None, opaque: false }
+        Shell { ui: Ui::new(), gpu: None, shot_gpu: None, drawn: None, actions: Vec::new(), picture: None, picture_tex: None, scale: 1.0, over_ui: false, last_sel: None, dd_anchor: None, opaque: false, load_look: Default::default(), load_look_gen: None, load_look_pending: None }
+    }
+
+    /// The loading screen's pictures as they are on the card now; a new answer of the panel
+    /// goes there with the next frame (until then the screen keeps what it had).
+    pub(crate) fn load_look(&mut self) -> crate::shell::loading::Look {
+        match crate::load_theme::current() {
+            Some(t) if self.load_look_gen != Some(t.generation) => self.load_look_pending = Some(t),
+            Some(_) => {}
+            None => {
+                self.load_look_gen = None;
+                self.load_look = Default::default();
+            }
+        }
+        self.load_look
     }
 
     /// A frame of the screens begins: the window's size in physical pixels and how many of
@@ -157,8 +176,30 @@ impl Shell {
             self.gpu = Some((Gpu::new(&r.device, format, 1, self.ui.atlas.size), format));
             self.ui.atlas.mark_all_dirty();
             self.picture_tex = None;
+            self.load_look = Default::default();
+            self.load_look_gen = None;
         }
         let Some((gpu, _)) = self.gpu.as_mut() else { return };
+        if let Some(t) = self.load_look_pending.take() {
+            // (into the slots of the last answer's pictures: the panel's new pictures replace them)
+            let mut up = |img: &Option<image::RgbaImage>, slot: Option<(usize, u32, u32)>| {
+                img.as_ref().map(|i| {
+                    let (w, h) = i.dimensions();
+                    let id = match slot {
+                        Some((id, _, _)) => {
+                            gpu.update_image(&r.device, &r.queue, id, w, h, i.as_raw());
+                            id
+                        }
+                        None => gpu.add_image(&r.device, &r.queue, w, h, i.as_raw()),
+                    };
+                    (id, w, h)
+                })
+            };
+            let background = up(&t.background, self.load_look.background);
+            let logo = up(&t.logo, self.load_look.logo);
+            self.load_look = crate::shell::loading::Look { background, logo };
+            self.load_look_gen = Some(t.generation);
+        }
         if let Some((pw, ph, px)) = self.picture.take() {
             match self.picture_tex {
                 Some(id) => gpu.update_image(&r.device, &r.queue, id, pw, ph, &px),

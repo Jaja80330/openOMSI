@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Picture
+- The loading screens take their look from the TRANSDEV TLA panel: a background picture over the whole window, darkened for the texts, a logo above the map's name, a line under it, the bar's colour and the tips. The game asks for it at every start and keeps the last answer, so the look is there at once, offline too (`OMSI_LOADING_THEME` names another panel; empty: none).
+
 ## 0.3.0 - 2026-10-11
 
 The NEROSY edition on openOMSI 0.2.27: everything of the upstream's 0.2.27 merged in, the edition's LAN, dispatch radio, duties and Big Picture kept.

@@ -279,7 +279,30 @@ pub(super) fn draw_loading(l: &mut Launcher) {
         Some(server) => format!("{} {server}", omsi_ui::tr("Connecting to")),
         None => l.state.map().map(|m| if m.friendly.is_empty() { m.name.clone() } else { m.friendly.clone() }).unwrap_or_else(|| omsi_ui::tr("Starting the drive").into_owned()),
     };
-    crate::shell::loading::draw(&mut l.ui, &title, None, &crate::ui::load_tip());
+    let look = load_look(l);
+    crate::shell::loading::draw(&mut l.ui, &title, None, &crate::ui::load_tip(), look);
+}
+
+/// The loading screen's pictures from the edition's panel (`load_theme`) among the launcher's
+/// pictures: by the panel's answer, sent to the card with the next frame.
+fn load_look(l: &mut Launcher) -> crate::shell::loading::Look {
+    let Some(t) = crate::load_theme::current() else { return Default::default() };
+    let mut pic = |what: &str, img: &Option<image::RgbaImage>| {
+        let img = img.as_ref()?;
+        let key = format!("loading-theme {what} {}", t.generation);
+        match l.icons.get(&key) {
+            Some(id) => Some((*id, img.width(), img.height())),
+            None => {
+                if !l.icons_pending.iter().any(|p| p.0 == key) {
+                    l.icons_pending.push((key, img.clone()));
+                }
+                None
+            }
+        }
+    };
+    let background = pic("background", &t.background);
+    let logo = pic("logo", &t.logo);
+    crate::shell::loading::Look { background, logo }
 }
 
 // ---------------------------------------------------------------------------------------

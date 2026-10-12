@@ -33,6 +33,7 @@ mod touch;
 mod placing;
 mod mt;
 mod updater;
+mod load_theme;
 mod update_watch;
 mod presence;
 mod ambience;
@@ -254,6 +255,10 @@ pub fn run() -> Result<()> {
     // The launcher itself runs the game with a full command line (--no-menu, --map, ...).
     let bare = std::env::args().len() == 1;
     let Some((args, server_cfg)) = prepare(args, bare)? else { return Ok(()) };
+    // the loading screen's look from the edition's panel (a window will show it)
+    if args.server.is_none() && args.offscreen.is_none() && args.export_glb.is_none() {
+        load_theme::start();
+    }
     if args.launcher || (bare && !args.menu) {
         // the launcher window (the game started again by it with a full command line);
         // OMSI_LAUNCHER=<program> still opens another launcher instead

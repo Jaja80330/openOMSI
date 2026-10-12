@@ -608,6 +608,10 @@ pub(crate) const LOAD_TIPS: [&str; 9] = [
 /// The tip of this start, translated: one for the whole run of the program (the launcher's
 /// loading screen and the game's tell the same).
 pub(crate) fn load_tip() -> String {
+    // (the edition's panel's tips, one after another, when it gave some: see `load_theme`)
+    if let Some(t) = crate::load_theme::tip_now() {
+        return t;
+    }
     static PICK: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     let k = *PICK.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as usize).unwrap_or(0) % LOAD_TIPS.len());
     omsi_ui::tr(LOAD_TIPS[k]).into_owned()
