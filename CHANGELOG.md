@@ -5,6 +5,7 @@
 ### Picture
 - The loading screens take their look from the TRANSDEV TLA panel: a background picture over the whole window, darkened for the texts, a logo above the map's name, a line under it, the bar's colour and the tips. The game asks for it at every start and keeps the last answer, so the look is there at once, offline too (`OMSI_LOADING_THEME` names another panel; empty: none).
 - The panel also says which parts show and where: the map's name or a title of its own, the line under it, the bar (its thickness, narrow or wide), the percentage, the tips (in order or shuffled), the logo's size, the texts' colour, and the name, bar and tip in the middle or near the bottom.
+- Loading screen layouts of a bus network's own, in solid colours and square corners so that they read over any picture: Line (a band along the bottom, the destination, the load as the line's diagram stop by stop), Sign (a destination sign with the line's number and a row of lamps) and Poster (a column down the left edge, the name and the percentage very large); the panel may take the accent and the band's colour from the background picture.
 
 ## 0.3.0 - 2026-10-11
 

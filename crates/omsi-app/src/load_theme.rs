@@ -12,12 +12,16 @@
 //!   "dim": 0.45, "subtitle": "…", "tips": ["…", "…"], "tip_seconds": 8, "accent": "#f2a900",
 //!   "show_title": true, "title": "", "show_bar": true, "bar_height": 3, "bar_width": "narrow",
 //!   "show_percent": true, "show_tips": true, "tips_random": true, "logo_height": 120,
-//!   "text_color": "#ececec", "layout": "center" }
+//!   "text_color": "#ececec", "layout": "center", "template": "line", "panel_color": "#0b1424",
+//!   "line_label": "TLA" }
 //! ```
 //!
 //! `title` replaces the map's name (empty: the name), `bar_width` is `narrow` or `wide`,
 //! `layout` `center` or `bottom` (the name, the bar and the tip near the window's bottom);
-//! `show_tips: false` shows no tip at all (no tips given: the game's own).
+//! `show_tips: false` shows no tip at all (no tips given: the game's own). `template` is the
+//! layout: `classic` (in the middle, as without a look), `line` (a band along the bottom with
+//! the line's diagram), `sign` (a destination sign) or `poster` (a column down the left edge);
+//! `panel_color` is the band's, sign's or column's colour, `line_label` the sign's line number.
 //!
 //! The pictures are PNG or JPEG; an address starting with `/` is taken on the panel's own
 //! host. `OMSI_LOADING_THEME` names another panel (empty: none at all).
@@ -83,13 +87,33 @@ pub struct Style {
     pub logo_height: f32,
     /// The texts' colour (none: the interface's).
     pub text_color: Option<[u8; 3]>,
-    /// The name, the bar and the tip near the window's bottom (else in its middle).
+    /// The name, the bar and the tip near the window's bottom (else in its middle; `classic`).
     pub bottom: bool,
+    /// The layout.
+    pub template: Template,
+    /// The colour of the band, the sign's box or the column (none: the network's night blue).
+    pub panel_color: Option<[u8; 3]>,
+    /// The line's number on the destination sign (empty: TLA).
+    pub line_label: String,
+}
+
+/// The loading screen's layouts (`shell::loading`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Template {
+    /// In the middle: the name, a thin bar and the tip.
+    #[default]
+    Classic,
+    /// A solid band along the bottom: the destination, and the line's diagram for the bar.
+    Line,
+    /// A bus's destination sign: the line's number, the name in its lamps, a row of lamps.
+    Sign,
+    /// A solid column down the left edge: the name very large, the percentage in large figures.
+    Poster,
 }
 
 impl Default for Style {
     fn default() -> Style {
-        Style { show_title: true, title: String::new(), show_bar: true, bar_height: 3.0, bar_wide: false, show_percent: true, show_tips: true, tips_random: true, logo_height: 120.0, text_color: None, bottom: false }
+        Style { show_title: true, title: String::new(), show_bar: true, bar_height: 3.0, bar_wide: false, show_percent: true, show_tips: true, tips_random: true, logo_height: 120.0, text_color: None, bottom: false, template: Template::Classic, panel_color: None, line_label: String::new() }
     }
 }
 
@@ -255,6 +279,14 @@ pub(crate) fn parse(json: &str) -> Option<Spec> {
         logo_height: num("logo_height").map(|v| v as f32).unwrap_or(d.logo_height).clamp(24.0, 320.0),
         text_color: parse_color(&text("text_color")),
         bottom: text("layout") == "bottom",
+        template: match text("template").as_str() {
+            "line" => Template::Line,
+            "sign" => Template::Sign,
+            "poster" => Template::Poster,
+            _ => Template::Classic,
+        },
+        panel_color: parse_color(&text("panel_color")),
+        line_label: text("line_label").chars().take(6).collect(),
     };
     let tips = o
         .get("tips")
@@ -390,7 +422,10 @@ mod tests {
         // the parts: as the plain screen when not said
         assert_eq!(s.style, Style::default());
         let t = parse(r##"{"show_title":false,"title":"TLA","show_bar":false,"bar_height":99,"bar_width":"wide","show_percent":false,"show_tips":false,"tips_random":false,"logo_height":5,"text_color":"#ffffff","layout":"bottom"}"##).unwrap().style;
-        assert_eq!(t, Style { show_title: false, title: "TLA".into(), show_bar: false, bar_height: 16.0, bar_wide: true, show_percent: false, show_tips: false, tips_random: false, logo_height: 24.0, text_color: Some([255, 255, 255]), bottom: true });
+        assert_eq!(t, Style { show_title: false, title: "TLA".into(), show_bar: false, bar_height: 16.0, bar_wide: true, show_percent: false, show_tips: false, tips_random: false, logo_height: 24.0, text_color: Some([255, 255, 255]), bottom: true, ..Style::default() });
+        let u = parse(r##"{"template":"sign","panel_color":"#102030","line_label":"N140-LONG"}"##).unwrap().style;
+        assert_eq!((u.template, u.panel_color, u.line_label.as_str()), (Template::Sign, Some([0x10, 0x20, 0x30]), "N140-L"));
+        assert_eq!(parse(r##"{"template":"autre"}"##).unwrap().style.template, Template::Classic);
         assert!(parse("not json").is_none());
     }
 
