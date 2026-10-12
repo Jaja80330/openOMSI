@@ -9,8 +9,15 @@
 //!
 //! ```json
 //! { "enabled": true, "background": "https://…/bg.jpg", "logo": "https://…/logo.png",
-//!   "dim": 0.45, "subtitle": "…", "tips": ["…", "…"], "tip_seconds": 8, "accent": "#f2a900" }
+//!   "dim": 0.45, "subtitle": "…", "tips": ["…", "…"], "tip_seconds": 8, "accent": "#f2a900",
+//!   "show_title": true, "title": "", "show_bar": true, "bar_height": 3, "bar_width": "narrow",
+//!   "show_percent": true, "show_tips": true, "tips_random": true, "logo_height": 120,
+//!   "text_color": "#ececec", "layout": "center" }
 //! ```
+//!
+//! `title` replaces the map's name (empty: the name), `bar_width` is `narrow` or `wide`,
+//! `layout` `center` or `bottom` (the name, the bar and the tip near the window's bottom);
+//! `show_tips: false` shows no tip at all (no tips given: the game's own).
 //!
 //! The pictures are PNG or JPEG; an address starting with `/` is taken on the panel's own
 //! host. `OMSI_LOADING_THEME` names another panel (empty: none at all).
@@ -51,6 +58,39 @@ pub struct Theme {
     pub tip_seconds: f32,
     /// The bar's colour (none: the interface's accent).
     pub accent: Option<[u8; 3]>,
+    /// Which parts show, how large and where.
+    pub style: Style,
+}
+
+/// Which parts of the loading screen show, how large and where (the plain screen's without a
+/// look).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Style {
+    /// The map's name (or `title`) over the bar.
+    pub show_title: bool,
+    /// In place of the map's name (empty: the name).
+    pub title: String,
+    pub show_bar: bool,
+    /// The bar's thickness and whether it is wide (60 % of the window) or narrow (points).
+    pub bar_height: f32,
+    pub bar_wide: bool,
+    pub show_percent: bool,
+    /// No tip at all when off.
+    pub show_tips: bool,
+    /// The tips in any order (else as listed).
+    pub tips_random: bool,
+    /// The logo's height at the most (points).
+    pub logo_height: f32,
+    /// The texts' colour (none: the interface's).
+    pub text_color: Option<[u8; 3]>,
+    /// The name, the bar and the tip near the window's bottom (else in its middle).
+    pub bottom: bool,
+}
+
+impl Default for Style {
+    fn default() -> Style {
+        Style { show_title: true, title: String::new(), show_bar: true, bar_height: 3.0, bar_wide: false, show_percent: true, show_tips: true, tips_random: true, logo_height: 120.0, text_color: None, bottom: false }
+    }
 }
 
 /// What the JSON says, before the pictures are fetched.
@@ -64,6 +104,7 @@ pub(crate) struct Spec {
     pub tips: Vec<String>,
     pub tip_seconds: f32,
     pub accent: Option<[u8; 3]>,
+    pub style: Style,
 }
 
 static CURRENT: Mutex<Option<Arc<Theme>>> = Mutex::new(None);
@@ -200,6 +241,21 @@ pub(crate) fn parse(json: &str) -> Option<Spec> {
     let o = v.as_object()?;
     let text = |k: &str| o.get(k).and_then(|x| x.as_str()).map(|s| s.trim().to_string()).unwrap_or_default();
     let num = |k: &str| o.get(k).and_then(|x| x.as_f64()).filter(|x| x.is_finite());
+    let flag = |k: &str, d: bool| o.get(k).and_then(|x| x.as_bool()).unwrap_or(d);
+    let d = Style::default();
+    let style = Style {
+        show_title: flag("show_title", d.show_title),
+        title: text("title").chars().take(MAX_TIP_CHARS).collect(),
+        show_bar: flag("show_bar", d.show_bar),
+        bar_height: num("bar_height").map(|v| v as f32).unwrap_or(d.bar_height).clamp(1.0, 16.0).round(),
+        bar_wide: text("bar_width") == "wide",
+        show_percent: flag("show_percent", d.show_percent),
+        show_tips: flag("show_tips", d.show_tips),
+        tips_random: flag("tips_random", d.tips_random),
+        logo_height: num("logo_height").map(|v| v as f32).unwrap_or(d.logo_height).clamp(24.0, 320.0),
+        text_color: parse_color(&text("text_color")),
+        bottom: text("layout") == "bottom",
+    };
     let tips = o
         .get("tips")
         .and_then(|t| t.as_array())
@@ -214,6 +270,7 @@ pub(crate) fn parse(json: &str) -> Option<Spec> {
         tips,
         tip_seconds: num("tip_seconds").unwrap_or(8.0).clamp(3.0, 60.0) as f32,
         accent: parse_color(&text("accent")),
+        style,
     })
 }
 
@@ -231,7 +288,7 @@ fn theme_of(json: &str, spec: Spec, background: Option<image::RgbaImage>, logo: 
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     json.hash(&mut h);
-    Theme { generation: h.finish(), background, logo, dim: spec.dim, subtitle: spec.subtitle, tips: spec.tips, tip_seconds: spec.tip_seconds, accent: spec.accent }
+    Theme { generation: h.finish(), background, logo, dim: spec.dim, subtitle: spec.subtitle, tips: spec.tips, tip_seconds: spec.tip_seconds, accent: spec.accent, style: spec.style }
 }
 
 // --- kept on disk: ~/.openomsi/cache/loading-theme/ -------------------------------------------
@@ -278,19 +335,40 @@ fn keep_picture(name: &str, bytes: Option<&[u8]>) {
 
 // --- for the screens ---------------------------------------------------------------------------
 
-/// The tip to show now: the panel's, one after another every `tip_seconds`; None: the
-/// game's own (`ui::load_tip`).
+/// The tip to show now: the panel's, one after another every `tip_seconds` (empty: the panel
+/// shows none); None: the game's own (`ui::load_tip`).
 pub fn tip_now() -> Option<String> {
     static T0: OnceLock<std::time::Instant> = OnceLock::new();
+    static SEED: OnceLock<u64> = OnceLock::new();
     let theme = current()?;
+    if !theme.style.show_tips {
+        return Some(String::new());
+    }
     if theme.tips.is_empty() {
         return None;
     }
     let t0 = *T0.get_or_init(std::time::Instant::now);
     let n = (t0.elapsed().as_secs_f32() / theme.tip_seconds) as usize;
-    // (a different first tip each start)
-    let first = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as usize).unwrap_or(0) / 100_000;
-    Some(theme.tips[(first + n) % theme.tips.len()].clone())
+    let seed = *SEED.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1);
+    Some(theme.tips[tip_index(theme.tips.len(), n, theme.style.tips_random, seed)].clone())
+}
+
+/// The `n`th tip shown of `len`: as listed, or in an order of their own each start (every tip
+/// once a round, before any comes again).
+pub(crate) fn tip_index(len: usize, n: usize, random: bool, seed: u64) -> usize {
+    if !random || len < 2 {
+        return n % len.max(1);
+    }
+    let mut order: Vec<usize> = (0..len).collect();
+    // (shuffled by the start's seed and the round's number: xorshift)
+    let mut x = (seed ^ ((n / len) as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1;
+    for i in (1..len).rev() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        order.swap(i, (x % (i as u64 + 1)) as usize);
+    }
+    order[n % len]
 }
 
 #[cfg(test)]
@@ -309,6 +387,10 @@ mod tests {
         assert_eq!(s.accent, Some([0xf2, 0xa9, 0x00]));
         assert!(!parse(r#"{"enabled":false}"#).unwrap().enabled);
         assert!(parse("[1]").is_none());
+        // the parts: as the plain screen when not said
+        assert_eq!(s.style, Style::default());
+        let t = parse(r##"{"show_title":false,"title":"TLA","show_bar":false,"bar_height":99,"bar_width":"wide","show_percent":false,"show_tips":false,"tips_random":false,"logo_height":5,"text_color":"#ffffff","layout":"bottom"}"##).unwrap().style;
+        assert_eq!(t, Style { show_title: false, title: "TLA".into(), show_bar: false, bar_height: 16.0, bar_wide: true, show_percent: false, show_tips: false, tips_random: false, logo_height: 24.0, text_color: Some([255, 255, 255]), bottom: true });
         assert!(parse("not json").is_none());
     }
 
@@ -323,6 +405,19 @@ mod tests {
         assert_eq!(resolve(base, "bg.jpg"), None);
         assert_eq!(resolve(base, "//evil/x.png"), None);
         assert_eq!(resolve("https://panel.fr", "/a.png").as_deref(), Some("https://panel.fr/a.png"));
+    }
+
+    #[test]
+    fn every_tip_comes_once_a_round() {
+        assert_eq!((0..5).map(|n| tip_index(3, n, false, 7)).collect::<Vec<_>>(), vec![0, 1, 2, 0, 1]);
+        for seed in [1u64, 42, 0xDEAD_BEEF] {
+            for round in 0..4 {
+                let mut seen: Vec<usize> = (0..6).map(|k| tip_index(6, round * 6 + k, true, seed)).collect();
+                seen.sort();
+                assert_eq!(seen, (0..6).collect::<Vec<_>>());
+            }
+        }
+        assert_eq!(tip_index(1, 5, true, 3), 0);
     }
 
     #[test]
