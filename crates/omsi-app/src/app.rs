@@ -728,7 +728,8 @@ impl App {
         let p = screen.progress.clamp(0.0, 1.0);
         self.cam.load_shown = if p < 0.05 { p } else { self.cam.load_shown.max(p) };
         self.shell.begin(w as f32, h as f32, scale, 1.0 / 30.0);
-        crate::shell::loading::draw(&mut self.shell.ui, &screen.title, Some(self.cam.load_shown), &screen.tip);
+        let look = self.shell.load_look();
+        crate::shell::loading::draw(&mut self.shell.ui, &screen.title, Some(self.cam.load_shown), &screen.tip, look);
         self.shell.finish();
         let acquired = s.acquire();
         let reconfigure = matches!(acquired, wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost);
