@@ -287,8 +287,8 @@ pub(super) fn draw_loading(l: &mut Launcher) {
 /// pictures: by the panel's answer, sent to the card with the next frame.
 fn load_look(l: &mut Launcher) -> crate::shell::loading::Look {
     let Some(t) = crate::load_theme::current() else { return Default::default() };
-    let mut pic = |what: &str, img: &Option<image::RgbaImage>| {
-        let img = img.as_ref()?;
+    let mut pic = |what: &str, img: Option<&image::RgbaImage>| {
+        let img = img?;
         let key = format!("loading-theme {what} {}", t.generation);
         match l.icons.get(&key) {
             Some(id) => Some((*id, img.width(), img.height())),
@@ -300,9 +300,11 @@ fn load_look(l: &mut Launcher) -> crate::shell::loading::Look {
             }
         }
     };
-    let background = pic("background", &t.background);
-    let logo = pic("logo", &t.logo);
-    crate::shell::loading::Look { background, logo }
+    // (a slideshow shows once all its pictures are on the card)
+    let backgrounds: Vec<_> = t.backgrounds.iter().enumerate().map(|(i, b)| pic(&format!("background {i}"), Some(b))).collect();
+    let backgrounds = backgrounds.into_iter().collect::<Option<Vec<_>>>().unwrap_or_default();
+    let logo = pic("logo", t.logo.as_ref());
+    crate::shell::loading::Look { backgrounds, logo }
 }
 
 // ---------------------------------------------------------------------------------------

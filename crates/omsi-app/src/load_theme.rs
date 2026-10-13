@@ -13,7 +13,8 @@
 //!   "show_title": true, "title": "", "show_bar": true, "bar_height": 3, "bar_width": "narrow",
 //!   "show_percent": true, "show_tips": true, "tips_random": true, "logo_height": 120,
 //!   "text_color": "#ececec", "layout": "center", "template": "line", "panel_color": "#0b1424",
-//!   "line_label": "TLA" }
+//!   "line_label": "TLA", "backgrounds": ["https://…/1.jpg", "https://…/2.jpg"],
+//!   "background_mode": "slideshow", "slide_seconds": 10, "slides_random": false }
 //! ```
 //!
 //! `title` replaces the map's name (empty: the name), `bar_width` is `narrow` or `wide`,
@@ -22,6 +23,10 @@
 //! layout: `classic` (in the middle, as without a look), `line` (a band along the bottom with
 //! the line's diagram), `sign` (a destination sign) or `poster` (a column down the left edge);
 //! `panel_color` is the band's, sign's or column's colour, `line_label` the sign's line number.
+//! `backgrounds` are several pictures (`background` alone: one); `background_mode` says how
+//! they show: `single` (the first), `slideshow` (one after another every `slide_seconds`,
+//! fading into the next, as listed or - `slides_random` - in an order of their own each start)
+//! or `random` (one drawn each start).
 //!
 //! The pictures are PNG or JPEG; an address starting with `/` is taken on the panel's own
 //! host. `OMSI_LOADING_THEME` names another panel (empty: none at all).
@@ -41,6 +46,11 @@ const MAX_PICTURE: u64 = 8 * 1024 * 1024;
 /// logo at this one (pixels).
 const MAX_BACKGROUND: (u32, u32) = (2560, 1440);
 const MAX_LOGO: (u32, u32) = (1024, 512);
+/// Backgrounds at the most; several kept at this size at the most (each on the card).
+const MAX_BACKGROUNDS: usize = 10;
+const MAX_SLIDE: (u32, u32) = (1920, 1080);
+/// How long a background fades into the next (seconds).
+const SLIDE_FADE: f32 = 1.0;
 /// Tips at the most, and a tip's length (characters).
 const MAX_TIPS: usize = 40;
 const MAX_TIP_CHARS: usize = 200;
@@ -50,7 +60,11 @@ pub struct Theme {
     /// Which answer this is (the JSON's hash): the pictures go to the graphics card again
     /// when it changes.
     pub generation: u64,
-    pub background: Option<image::RgbaImage>,
+    /// The backgrounds to show (one but in a slideshow; none: black).
+    pub backgrounds: Vec<image::RgbaImage>,
+    /// How long a background of a slideshow stands (seconds), and in which order.
+    pub slide_seconds: f32,
+    pub slides_random: bool,
     pub logo: Option<image::RgbaImage>,
     /// How much darker the background is drawn (0 to 0.9), for the texts over it.
     pub dim: f32,
@@ -117,11 +131,27 @@ impl Default for Style {
     }
 }
 
+/// How the backgrounds show.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) enum BgMode {
+    /// The first.
+    #[default]
+    Single,
+    /// One after another.
+    Slideshow,
+    /// One drawn each start.
+    Random,
+}
+
 /// What the JSON says, before the pictures are fetched.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Spec {
     pub enabled: bool,
-    pub background: String,
+    /// The backgrounds' addresses (`backgrounds`, else `background`).
+    pub backgrounds: Vec<String>,
+    pub bg_mode: BgMode,
+    pub slide_seconds: f32,
+    pub slides_random: bool,
     pub logo: String,
     pub dim: f32,
     pub subtitle: String,
@@ -209,11 +239,40 @@ fn fetch(url: &str, kept: Option<&str>) -> Result<Option<(String, Option<Theme>)
             }
         }
     };
-    let bg = picture(&spec.background, MAX_BACKGROUND);
+    // (every background is kept, the one drawn as well: the next start may draw another)
+    let max = background_max(&spec);
+    let bgs: Vec<Option<(Vec<u8>, image::RgbaImage)>> = spec.backgrounds.iter().map(|a| picture(a, max)).collect();
     let logo = picture(&spec.logo, MAX_LOGO);
-    keep_picture("background", bg.as_ref().map(|p| p.0.as_slice()));
+    for i in 0..MAX_BACKGROUNDS {
+        keep_picture(&format!("background-{i}"), bgs.get(i).and_then(|p| p.as_ref()).map(|p| p.0.as_slice()));
+    }
+    keep_picture("background", None);
     keep_picture("logo", logo.as_ref().map(|p| p.0.as_slice()));
-    Ok(Some((json.clone(), Some(theme_of(&json, spec, bg.map(|p| p.1), logo.map(|p| p.1))))))
+    let mut bgs: Vec<Option<image::RgbaImage>> = bgs.into_iter().map(|p| p.map(|p| p.1)).collect();
+    let backgrounds = shown_backgrounds(&spec, start_seed()).into_iter().filter_map(|i| bgs.get_mut(i).and_then(|b| b.take())).collect();
+    Ok(Some((json.clone(), Some(theme_of(&json, spec, backgrounds, logo.map(|p| p.1))))))
+}
+
+/// The backgrounds' size at the most: smaller when several are on the card at once.
+fn background_max(spec: &Spec) -> (u32, u32) {
+    if spec.bg_mode == BgMode::Slideshow && spec.backgrounds.len() > 1 { MAX_SLIDE } else { MAX_BACKGROUND }
+}
+
+/// Which of the backgrounds show this start: the first, one drawn by `seed`, or all of them.
+pub(crate) fn shown_backgrounds(spec: &Spec, seed: u64) -> Vec<usize> {
+    let n = spec.backgrounds.len();
+    match spec.bg_mode {
+        _ if n == 0 => Vec::new(),
+        BgMode::Single => vec![0],
+        BgMode::Random => vec![(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % n],
+        BgMode::Slideshow => (0..n).collect(),
+    }
+}
+
+/// A number of this start's own (the tips' and the backgrounds' order, the background drawn).
+fn start_seed() -> u64 {
+    static SEED: OnceLock<u64> = OnceLock::new();
+    *SEED.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1)
 }
 
 fn get(agent: &ureq::Agent, url: &str, max: u64) -> Result<Vec<u8>, String> {
@@ -293,9 +352,24 @@ pub(crate) fn parse(json: &str) -> Option<Spec> {
         .and_then(|t| t.as_array())
         .map(|a| a.iter().filter_map(|x| x.as_str()).map(|s| s.trim().chars().take(MAX_TIP_CHARS).collect::<String>()).filter(|s| !s.is_empty()).take(MAX_TIPS).collect())
         .unwrap_or_default();
+    let mut backgrounds: Vec<String> = o
+        .get("backgrounds")
+        .and_then(|t| t.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).take(MAX_BACKGROUNDS).collect())
+        .unwrap_or_default();
+    if backgrounds.is_empty() && !text("background").is_empty() {
+        backgrounds.push(text("background"));
+    }
     Some(Spec {
         enabled: o.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true),
-        background: text("background"),
+        backgrounds,
+        bg_mode: match text("background_mode").as_str() {
+            "slideshow" => BgMode::Slideshow,
+            "random" => BgMode::Random,
+            _ => BgMode::Single,
+        },
+        slide_seconds: num("slide_seconds").unwrap_or(10.0).clamp(3.0, 60.0) as f32,
+        slides_random: flag("slides_random", false),
         logo: text("logo"),
         dim: num("dim").unwrap_or(0.45).clamp(0.0, 0.9) as f32,
         subtitle: text("subtitle").chars().take(MAX_TIP_CHARS).collect(),
@@ -316,11 +390,11 @@ pub(crate) fn parse_color(s: &str) -> Option<[u8; 3]> {
     Some([c(0)?, c(2)?, c(4)?])
 }
 
-fn theme_of(json: &str, spec: Spec, background: Option<image::RgbaImage>, logo: Option<image::RgbaImage>) -> Theme {
+fn theme_of(json: &str, spec: Spec, backgrounds: Vec<image::RgbaImage>, logo: Option<image::RgbaImage>) -> Theme {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     json.hash(&mut h);
-    Theme { generation: h.finish(), background, logo, dim: spec.dim, subtitle: spec.subtitle, tips: spec.tips, tip_seconds: spec.tip_seconds, accent: spec.accent, style: spec.style }
+    Theme { generation: h.finish(), backgrounds, slide_seconds: spec.slide_seconds, slides_random: spec.slides_random, logo, dim: spec.dim, subtitle: spec.subtitle, tips: spec.tips, tip_seconds: spec.tip_seconds, accent: spec.accent, style: spec.style }
 }
 
 // --- kept on disk: ~/.openomsi/cache/loading-theme/ -------------------------------------------
@@ -338,9 +412,11 @@ fn read_kept() -> Option<(String, Theme)> {
         return None;
     }
     let pic = |name: &str, max| std::fs::read(d.join(name)).ok().and_then(|b| decode(&b, max).ok());
-    let bg = if spec.background.is_empty() { None } else { pic("background", MAX_BACKGROUND) };
+    // (a background kept by an older game: `background`)
+    let max = background_max(&spec);
+    let backgrounds = shown_backgrounds(&spec, start_seed()).into_iter().filter_map(|i| pic(&format!("background-{i}"), max).or_else(|| if i == 0 { pic("background", max) } else { None })).collect();
     let logo = if spec.logo.is_empty() { None } else { pic("logo", MAX_LOGO) };
-    Some((json.clone(), theme_of(&json, spec, bg, logo)))
+    Some((json.clone(), theme_of(&json, spec, backgrounds, logo)))
 }
 
 fn keep(json: &str, theme: Option<&Theme>) {
@@ -348,6 +424,9 @@ fn keep(json: &str, theme: Option<&Theme>) {
     let _ = std::fs::create_dir_all(&d);
     if theme.is_none() {
         let _ = std::fs::remove_file(d.join("background"));
+        for i in 0..MAX_BACKGROUNDS {
+            let _ = std::fs::remove_file(d.join(format!("background-{i}")));
+        }
         let _ = std::fs::remove_file(d.join("logo"));
     }
     if let Err(e) = std::fs::write(d.join("theme.json"), json) {
@@ -370,8 +449,6 @@ fn keep_picture(name: &str, bytes: Option<&[u8]>) {
 /// The tip to show now: the panel's, one after another every `tip_seconds` (empty: the panel
 /// shows none); None: the game's own (`ui::load_tip`).
 pub fn tip_now() -> Option<String> {
-    static T0: OnceLock<std::time::Instant> = OnceLock::new();
-    static SEED: OnceLock<u64> = OnceLock::new();
     let theme = current()?;
     if !theme.style.show_tips {
         return Some(String::new());
@@ -379,10 +456,35 @@ pub fn tip_now() -> Option<String> {
     if theme.tips.is_empty() {
         return None;
     }
-    let t0 = *T0.get_or_init(std::time::Instant::now);
-    let n = (t0.elapsed().as_secs_f32() / theme.tip_seconds) as usize;
-    let seed = *SEED.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1);
-    Some(theme.tips[tip_index(theme.tips.len(), n, theme.style.tips_random, seed)].clone())
+    let n = (since_start() / theme.tip_seconds) as usize;
+    Some(theme.tips[tip_index(theme.tips.len(), n, theme.style.tips_random, start_seed())].clone())
+}
+
+/// Seconds since a screen first asked (the tips and the slideshow go on from one screen to
+/// the next).
+fn since_start() -> f32 {
+    static T0: OnceLock<std::time::Instant> = OnceLock::new();
+    T0.get_or_init(std::time::Instant::now).elapsed().as_secs_f32()
+}
+
+/// The background to show now of `len`, and the next one fading in over it (how far, 0..1).
+pub fn slide_now(len: usize) -> (usize, Option<(usize, f32)>) {
+    let Some(theme) = current() else { return (0, None) };
+    slide_at(len, since_start(), theme.slide_seconds, theme.slides_random, start_seed())
+}
+
+/// The same at `t` seconds: each background `seconds`, its last `SLIDE_FADE` a fade into the
+/// next; in the order of `tip_index`.
+pub(crate) fn slide_at(len: usize, t: f32, seconds: f32, random: bool, seed: u64) -> (usize, Option<(usize, f32)>) {
+    if len < 2 {
+        return (0, None);
+    }
+    let seconds = seconds.max(SLIDE_FADE * 2.0);
+    let n = (t / seconds) as usize;
+    let into = t - n as f32 * seconds;
+    let now = tip_index(len, n, random, seed);
+    let fade = (into - (seconds - SLIDE_FADE)) / SLIDE_FADE;
+    (now, (fade > 0.0).then(|| (tip_index(len, n + 1, random, seed), fade.min(1.0))))
 }
 
 /// The `n`th tip shown of `len`: as listed, or in an order of their own each start (every tip
@@ -411,7 +513,8 @@ mod tests {
     fn the_json_is_read() {
         let s = parse(r##"{"background":"/public/omsi/bg.jpg?v=3","dim":2,"subtitle":" Bienvenue ","tips":["a"," ",3,"b"],"tip_seconds":1,"accent":"#F2A900"}"##).unwrap();
         assert!(s.enabled);
-        assert_eq!(s.background, "/public/omsi/bg.jpg?v=3");
+        assert_eq!(s.backgrounds, vec!["/public/omsi/bg.jpg?v=3".to_string()]);
+        assert_eq!(s.bg_mode, BgMode::Single);
         assert_eq!(s.dim, 0.9);
         assert_eq!(s.subtitle, "Bienvenue");
         assert_eq!(s.tips, vec!["a".to_string(), "b".to_string()]);
@@ -427,6 +530,31 @@ mod tests {
         assert_eq!((u.template, u.panel_color, u.line_label.as_str()), (Template::Sign, Some([0x10, 0x20, 0x30]), "N140-L"));
         assert_eq!(parse(r##"{"template":"autre"}"##).unwrap().style.template, Template::Classic);
         assert!(parse("not json").is_none());
+        let b = parse(r##"{"background":"/a.jpg","backgrounds":["/b.jpg"," ","/c.jpg"],"background_mode":"slideshow","slide_seconds":1,"slides_random":true}"##).unwrap();
+        assert_eq!((b.backgrounds.len(), b.bg_mode, b.slide_seconds, b.slides_random), (2, BgMode::Slideshow, 3.0, true));
+        assert_eq!(parse(r##"{"background_mode":"random"}"##).unwrap().bg_mode, BgMode::Random);
+    }
+
+    #[test]
+    fn backgrounds_shown() {
+        let mut s = parse(r##"{"backgrounds":["/a","/b","/c"]}"##).unwrap();
+        assert_eq!(shown_backgrounds(&s, 9), vec![0]);
+        s.bg_mode = BgMode::Slideshow;
+        assert_eq!(shown_backgrounds(&s, 9), vec![0, 1, 2]);
+        s.bg_mode = BgMode::Random;
+        let drawn: std::collections::BTreeSet<usize> = (1..200u64).flat_map(|k| shown_backgrounds(&s, k)).collect();
+        assert_eq!(drawn.into_iter().collect::<Vec<_>>(), vec![0, 1, 2]);
+        s.backgrounds.clear();
+        assert!(shown_backgrounds(&s, 9).is_empty());
+        // the slideshow: 10 s each, the last second fading into the next
+        assert_eq!(slide_at(1, 50.0, 10.0, false, 1), (0, None));
+        assert_eq!(slide_at(3, 4.0, 10.0, false, 1), (0, None));
+        let (now, next) = slide_at(3, 19.5, 10.0, false, 1);
+        assert_eq!(now, 1);
+        let (k, a) = next.unwrap();
+        assert_eq!(k, 2);
+        assert!((a - 0.5).abs() < 1e-3);
+        assert_eq!(slide_at(3, 30.0, 10.0, false, 1).0, 0);
     }
 
     #[test]

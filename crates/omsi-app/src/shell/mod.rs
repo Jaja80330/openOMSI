@@ -97,7 +97,7 @@ impl Shell {
                 self.load_look = Default::default();
             }
         }
-        self.load_look
+        self.load_look.clone()
     }
 
     /// A frame of the screens begins: the window's size in physical pixels and how many of
@@ -182,8 +182,8 @@ impl Shell {
         let Some((gpu, _)) = self.gpu.as_mut() else { return };
         if let Some(t) = self.load_look_pending.take() {
             // (into the slots of the last answer's pictures: the panel's new pictures replace them)
-            let mut up = |img: &Option<image::RgbaImage>, slot: Option<(usize, u32, u32)>| {
-                img.as_ref().map(|i| {
+            let mut up = |img: Option<&image::RgbaImage>, slot: Option<(usize, u32, u32)>| {
+                img.map(|i| {
                     let (w, h) = i.dimensions();
                     let id = match slot {
                         Some((id, _, _)) => {
@@ -195,9 +195,9 @@ impl Shell {
                     (id, w, h)
                 })
             };
-            let background = up(&t.background, self.load_look.background);
-            let logo = up(&t.logo, self.load_look.logo);
-            self.load_look = crate::shell::loading::Look { background, logo };
+            let backgrounds = t.backgrounds.iter().enumerate().filter_map(|(i, b)| up(Some(b), self.load_look.backgrounds.get(i).copied())).collect();
+            let logo = up(t.logo.as_ref(), self.load_look.logo);
+            self.load_look = crate::shell::loading::Look { backgrounds, logo };
             self.load_look_gen = Some(t.generation);
         }
         if let Some((pw, ph, px)) = self.picture.take() {

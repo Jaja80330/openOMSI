@@ -20,10 +20,10 @@ use crate::launcher::ui::Ui;
 use crate::load_theme::{Style, Template};
 
 /// The panel's pictures as one screen has them on its graphics card (`load_theme`): the
-/// texture and its size.
-#[derive(Clone, Copy, Default, Debug, PartialEq)]
+/// texture and its size (the backgrounds: one, or a slideshow's).
+#[derive(Clone, Default, Debug, PartialEq)]
 pub(crate) struct Look {
-    pub(crate) background: Option<(usize, u32, u32)>,
+    pub(crate) backgrounds: Vec<(usize, u32, u32)>,
     pub(crate) logo: Option<(usize, u32, u32)>,
 }
 
@@ -51,11 +51,19 @@ pub(crate) fn draw(ui: &mut Ui, title: &str, progress: Option<f32>, tip: &str, l
     let full = Rect::new(0.0, 0.0, size.x, size.y);
     ui.solid(full);
     ui.p().rect(full, Color::rgba(0, 0, 0, 1.0));
-    if let Some((tex, w, h)) = look.background {
-        // over the whole window, cut evenly where its shape is not the picture's
-        let k = (size.x / w.max(1) as f32).max(size.y / h.max(1) as f32);
-        let (dw, dh) = (w as f32 * k, h as f32 * k);
-        ui.image(Rect::new(((size.x - dw) * 0.5).round(), ((size.y - dh) * 0.5).round(), dw.round(), dh.round()), tex, 0.0);
+    if !look.backgrounds.is_empty() {
+        // over the whole window, cut evenly where its shape is not the picture's; in a
+        // slideshow the next one fades in over it
+        let mut cover = |(tex, w, h): (usize, u32, u32), alpha: f32| {
+            let k = (size.x / w.max(1) as f32).max(size.y / h.max(1) as f32);
+            let (dw, dh) = (w as f32 * k, h as f32 * k);
+            ui.image_tinted(Rect::new(((size.x - dw) * 0.5).round(), ((size.y - dh) * 0.5).round(), dw.round(), dh.round()), tex, 0.0, Color([1.0, 1.0, 1.0, alpha]));
+        };
+        let (now, next) = crate::load_theme::slide_now(look.backgrounds.len());
+        cover(look.backgrounds[now.min(look.backgrounds.len() - 1)], 1.0);
+        if let Some((k, a)) = next.filter(|n| n.0 < look.backgrounds.len()) {
+            cover(look.backgrounds[k], a);
+        }
         let dim = theme.as_ref().map(|t| t.dim).unwrap_or(0.0);
         if dim > 0.0 {
             ui.p().rect(full, Color::rgba(0, 0, 0, dim));
