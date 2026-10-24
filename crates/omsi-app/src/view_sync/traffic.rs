@@ -20,7 +20,7 @@ use std::sync::Arc;
 use omsi_render::{Renderer, Scene};
 use omsi_texture::Image;
 
-pub(super) const SCRIPT_UPLOAD_BUDGET: usize = 4 << 20;
+pub(super) const SCRIPT_UPLOAD_BUDGET: usize = 16 << 20;
 
 /// Within this distance (m) of the camera a timetable bus has its driver at the wheel.
 pub(super) const DRIVER_NEAR: f64 = 70.0;

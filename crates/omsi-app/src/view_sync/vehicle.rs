@@ -485,14 +485,18 @@ pub fn sync_vehicle_textures(
         }
     }
     let mut rebound = Vec::new();
+    let mut uploaded = false;
     for (i, st) in vehicle.host.script_textures.iter_mut().enumerate() {
         // (far away what the scripts redraw goes up every half second: `displays_far`)
         if !render.displays_far {
             if let Some(Some(tex)) = render.script_textures.get(i) {
-                if *budget == 0 {
+                // a car is always allowed one picture per turn even when the cars before it
+                // used the budget up (its matrix layers are 4 MB each)
+                if *budget == 0 && uploaded {
                     continue;
                 }
                 let Some(rgba) = st.take_upload() else { continue };
+                uploaded = true;
                 *budget = budget.saturating_sub(rgba.len());
                 let img = Image {
                     width: st.width,
